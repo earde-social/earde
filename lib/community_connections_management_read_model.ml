@@ -10,7 +10,6 @@
    remains the authority. See the .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Cc = Community_connections
 
 type counterpart = {
@@ -54,20 +53,13 @@ let view_accepted { view_accepted; _ } = view_accepted
 let view_incoming { view_incoming; _ } = view_incoming
 let view_outgoing { view_outgoing; _ } = view_outgoing
 
-type target = {
-  target_id : int;
-  target_name : string;
-  target_slug : string;
-}
+type target = { target_id : int; target_name : string; target_slug : string }
 
 let target_id { target_id; _ } = target_id
 let target_name { target_name; _ } = target_name
 let target_slug { target_slug; _ } = target_slug
 
-type resolution =
-  | Connectable of target
-  | Already_active
-  | Unavailable
+type resolution = Connectable of target | Already_active | Unavailable
 
 type error =
   | Invalid_user_id
@@ -120,16 +112,12 @@ let positive id = Int64.compare id 0L > 0
 let load_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 string int) bool)
-   ->? Caqti_type.(t2 (t2 (t2 int string) (t2 string string)) (t2 string bool)))
-  "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
-          c.discoverable \
-   FROM communities c \
-   WHERE c.slug = $1 \
-     AND (EXISTS (SELECT 1 FROM community_moderators m \
-                  WHERE m.community_id = c.id AND m.user_id = $2 \
-                    AND m.role = 'top_mod') \
-          OR ($3 AND EXISTS (SELECT 1 FROM users u \
-                             WHERE u.id = $2 AND u.is_admin)))"
+  ->? Caqti_type.(t2 (t2 (t2 int string) (t2 string string)) (t2 string bool)))
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
+     c.discoverable FROM communities c WHERE c.slug = $1 AND (EXISTS (SELECT 1 \
+     FROM community_moderators m WHERE m.community_id = c.id AND m.user_id = \
+     $2 AND m.role = 'top_mod') OR ($3 AND EXISTS (SELECT 1 FROM users u WHERE \
+     u.id = $2 AND u.is_admin)))"
 
 (* Accepted connections read symmetrically: the counterpart is whichever of
    the two columns is not this community. Ordered by the counterpart's name
@@ -137,37 +125,32 @@ let load_community_query =
 let accepted_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* Caqti_type.(t2 (t2 int64 int) (t2 string string)))
-  "SELECT cc.id, other.id, other.slug, other.name \
-   FROM community_connections cc \
-   JOIN communities other \
-     ON other.id = CASE WHEN cc.requester_community_id = $1 \
-                        THEN cc.recipient_community_id \
-                        ELSE cc.requester_community_id END \
-   WHERE (cc.requester_community_id = $1 OR cc.recipient_community_id = $1) \
-     AND cc.status = 'accepted' \
-   ORDER BY other.name ASC, cc.id ASC"
+    "SELECT cc.id, other.id, other.slug, other.name FROM community_connections \
+     cc JOIN communities other ON other.id = CASE WHEN \
+     cc.requester_community_id = $1 THEN cc.recipient_community_id ELSE \
+     cc.requester_community_id END WHERE (cc.requester_community_id = $1 OR \
+     cc.recipient_community_id = $1) AND cc.status = 'accepted' ORDER BY \
+     other.name ASC, cc.id ASC"
 
 (* The review queue: pending requests addressed to this community, in
    arrival order, with the private note. *)
 let incoming_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->* Caqti_type.(t2 (t2 int64 int) (t3 string string (option string))))
-  "SELECT cc.id, other.id, other.slug, other.name, cc.request_note \
-   FROM community_connections cc \
-   JOIN communities other ON other.id = cc.requester_community_id \
-   WHERE cc.recipient_community_id = $1 AND cc.status = 'pending' \
-   ORDER BY cc.created_at ASC, cc.id ASC"
+  ->* Caqti_type.(t2 (t2 int64 int) (t3 string string (option string))))
+    "SELECT cc.id, other.id, other.slug, other.name, cc.request_note FROM \
+     community_connections cc JOIN communities other ON other.id = \
+     cc.requester_community_id WHERE cc.recipient_community_id = $1 AND \
+     cc.status = 'pending' ORDER BY cc.created_at ASC, cc.id ASC"
 
 let outgoing_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->* Caqti_type.(t2 (t2 int64 int) (t3 string string (option string))))
-  "SELECT cc.id, other.id, other.slug, other.name, cc.request_note \
-   FROM community_connections cc \
-   JOIN communities other ON other.id = cc.recipient_community_id \
-   WHERE cc.requester_community_id = $1 AND cc.status = 'pending' \
-   ORDER BY cc.created_at ASC, cc.id ASC"
+  ->* Caqti_type.(t2 (t2 int64 int) (t3 string string (option string))))
+    "SELECT cc.id, other.id, other.slug, other.name, cc.request_note FROM \
+     community_connections cc JOIN communities other ON other.id = \
+     cc.recipient_community_id WHERE cc.requester_community_id = $1 AND \
+     cc.status = 'pending' ORDER BY cc.created_at ASC, cc.id ASC"
 
 (* Connectable targets. The eligibility predicate is spelled in SQL so the
    LIMIT applies after exclusion — an ineligible community can never consume
@@ -179,25 +162,16 @@ let outgoing_query =
 let search_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int string) int)
-   ->* Caqti_type.(
-         t2 (t2 (t2 int string) (t2 string string)) (t2 string bool)))
-  "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
-          c.discoverable \
-   FROM communities c \
-   WHERE c.id <> $1 \
-     AND c.visibility = 'public' \
-     AND c.onboarding_state = 'published' \
-     AND c.discoverable \
-     AND (c.name ILIKE $2 ESCAPE '\\' OR c.slug ILIKE $2 ESCAPE '\\') \
-     AND NOT EXISTS ( \
-           SELECT 1 FROM community_connections cc \
-           WHERE cc.status IN ('pending', 'accepted') \
-             AND LEAST(cc.requester_community_id, \
-                       cc.recipient_community_id) = LEAST(c.id, $1) \
-             AND GREATEST(cc.requester_community_id, \
-                          cc.recipient_community_id) = GREATEST(c.id, $1)) \
-   ORDER BY c.name ASC, c.id ASC \
-   LIMIT $3"
+  ->* Caqti_type.(t2 (t2 (t2 int string) (t2 string string)) (t2 string bool)))
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
+     c.discoverable FROM communities c WHERE c.id <> $1 AND c.visibility = \
+     'public' AND c.onboarding_state = 'published' AND c.discoverable AND \
+     (c.name ILIKE $2 ESCAPE '\\' OR c.slug ILIKE $2 ESCAPE '\\') AND NOT \
+     EXISTS ( SELECT 1 FROM community_connections cc WHERE cc.status IN \
+     ('pending', 'accepted') AND LEAST(cc.requester_community_id, \
+     cc.recipient_community_id) = LEAST(c.id, $1) AND \
+     GREATEST(cc.requester_community_id, cc.recipient_community_id) = \
+     GREATEST(c.id, $1)) ORDER BY c.name ASC, c.id ASC LIMIT $3"
 
 (* One exact target slug, with the two facts that decide its resolution:
    its eligibility columns and whether the unordered pair already holds an
@@ -207,19 +181,14 @@ let search_query =
 let resolve_target_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int string)
-   ->? Caqti_type.(
-         t2 (t2 (t2 int string) (t2 string string)) (t3 string bool bool)))
-  "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
-          c.discoverable, \
-          EXISTS (SELECT 1 FROM community_connections cc \
-                  WHERE cc.status IN ('pending', 'accepted') \
-                    AND LEAST(cc.requester_community_id, \
-                              cc.recipient_community_id) = LEAST(c.id, $1) \
-                    AND GREATEST(cc.requester_community_id, \
-                                 cc.recipient_community_id) \
-                        = GREATEST(c.id, $1)) \
-   FROM communities c \
-   WHERE c.slug = $2 AND c.id <> $1"
+  ->? Caqti_type.(
+        t2 (t2 (t2 int string) (t2 string string)) (t3 string bool bool)))
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
+     c.discoverable, EXISTS (SELECT 1 FROM community_connections cc WHERE \
+     cc.status IN ('pending', 'accepted') AND LEAST(cc.requester_community_id, \
+     cc.recipient_community_id) = LEAST(c.id, $1) AND \
+     GREATEST(cc.requester_community_id, cc.recipient_community_id) = \
+     GREATEST(c.id, $1)) FROM communities c WHERE c.slug = $2 AND c.id <> $1"
 
 (* === decoding === *)
 
@@ -234,7 +203,8 @@ let eligible_of_raw ~visibility_raw ~onboarding_raw ~discoverable =
 
 let decode_counterpart ~id ~slug ~name =
   if id > 0 && addressable_slug slug && nonblank name && control_safe name then
-    Some { counterpart_id = id; counterpart_name = name; counterpart_slug = slug }
+    Some
+      { counterpart_id = id; counterpart_name = name; counterpart_slug = slug }
   else None
 
 (* The stored note must round-trip byte-exactly through the pure
@@ -243,8 +213,9 @@ let decode_counterpart ~id ~slug ~name =
    go back through the pure constructor, which re-proves they are positive
    and distinct. *)
 let decode_entry ~community_id ~id ~counterpart ~note =
-  match decode_counterpart ~id:counterpart.counterpart_id
-          ~slug:counterpart.counterpart_slug ~name:counterpart.counterpart_name
+  match
+    decode_counterpart ~id:counterpart.counterpart_id
+      ~slug:counterpart.counterpart_slug ~name:counterpart.counterpart_name
   with
   | None -> None
   | Some counterpart ->
@@ -258,7 +229,8 @@ let decode_entry ~community_id ~id ~counterpart ~note =
         | Ok value -> Cc.request_note value = note
       in
       if positive id && pair_ok then
-        Some { entry_id = id; entry_counterpart = counterpart; entry_note = note }
+        Some
+          { entry_id = id; entry_counterpart = counterpart; entry_note = note }
       else None
 
 (* All-or-nothing: one incoherent row fails the whole call, so no caller can
@@ -295,8 +267,8 @@ let load_for_manager (module C : Caqti_lwt.CONNECTION) ~user_id
     | Ok None -> Lwt.return (Ok None)
     | Ok
         (Some
-          ( ((community_id, stored_slug), (name, visibility_raw)),
-            (onboarding_raw, discoverable) )) -> (
+           ( ((community_id, stored_slug), (name, visibility_raw)),
+             (onboarding_raw, discoverable) )) -> (
         match
           ( community_id > 0
             && String.equal stored_slug community_slug
@@ -420,8 +392,8 @@ let resolve_target (module C : Caqti_lwt.CONNECTION) ~community_id ~slug =
     | Ok None -> Lwt.return (Ok Unavailable)
     | Ok
         (Some
-          ( ((id, stored_slug), (name, visibility_raw)),
-            (onboarding_raw, discoverable, active) )) -> (
+           ( ((id, stored_slug), (name, visibility_raw)),
+             (onboarding_raw, discoverable, active) )) -> (
         match eligible_of_raw ~visibility_raw ~onboarding_raw ~discoverable with
         | None -> Lwt.return (Error Inconsistent_data)
         | Some eligible ->
@@ -439,4 +411,5 @@ let resolve_target (module C : Caqti_lwt.CONNECTION) ~community_id ~slug =
               Lwt.return
                 (Ok
                    (Connectable
-                      { target_id = id; target_name = name; target_slug = slug })))
+                      { target_id = id; target_name = name; target_slug = slug }))
+        )

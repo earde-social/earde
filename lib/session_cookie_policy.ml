@@ -15,7 +15,7 @@ let secure_required = function
 let has_secure_attribute value =
   String.split_on_char ';' value
   |> List.exists (fun part ->
-         String.equal (String.lowercase_ascii (String.trim part)) "secure")
+      String.equal (String.lowercase_ascii (String.trim part)) "secure")
 
 let add_secure_attribute value =
   if has_secure_attribute value then value else value ^ "; Secure"

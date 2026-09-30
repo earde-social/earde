@@ -50,7 +50,8 @@ let authenticated_user_id request =
    origin-gated routes, and a no-referrer document makes the browser send
    Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -59,7 +60,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -114,8 +116,8 @@ let unavailable_page request =
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 (* One generic 500 for every read-model failure past the gates — no
    Caqti/PostgreSQL detail, error constructor, or fixture value ever reaches
@@ -312,8 +314,7 @@ let handle_store_result request ~user_id ~slug ~values = function
          legacy/network classification. *)
       respond_owner_authorized request ~user_id ~community_slug:slug
         ~values_of:(fun _ -> values)
-        ~feedback:(Some Pages_ncp.Community_slug_unavailable)
-        ~status:`Conflict
+        ~feedback:(Some Pages_ncp.Community_slug_unavailable) ~status:`Conflict
   | Error Store.Draft_unavailable ->
       (* Missing, legacy, already published (including a replayed
          submission), renamed, unauthorized, concurrently demoted, and a
@@ -340,10 +341,10 @@ let make_network_community_publication_handler ~mode ~load_config request =
       | Some slug -> (
           match load_config () with
           | Error _ -> unavailable_page request
-          | Ok config ->
+          | Ok config -> (
               if not (Request_origin.same_origin_request config request) then
                 forbidden_page request
-              else (
+              else
                 (* Dream's form API enforces the URL-encoded content type and
                    verifies its own CSRF field, which it strips from the
                    returned fields — so the strict parser below sees

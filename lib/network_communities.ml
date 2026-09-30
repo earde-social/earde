@@ -1,9 +1,7 @@
 (* Pure lifecycle rules for GitHub-provisioned network communities. No IO —
    see the .mli for the invariants each function encodes. *)
 
-type publication_mode =
-  | Public
-  | Unlisted
+type publication_mode = Public | Unlisted
 
 (* Exact match only: settings values come from our own forms, so anything
    off-enum (padding, case drift) is a bug or tampering — never coerced. *)
@@ -25,21 +23,23 @@ type publication_configuration = {
 
 let configuration_for_publication = function
   | Public ->
-      { visibility = Community_types.Community_public;
+      {
+        visibility = Community_types.Community_public;
         indexable = true;
         discoverable = true;
-        onboarding_state = Community_types.Community_published }
+        onboarding_state = Community_types.Community_published;
+      }
   | Unlisted ->
       (* Unlisted is not privacy: still public by direct URL, just kept out of
          indexing and discovery. *)
-      { visibility = Community_types.Community_public;
+      {
+        visibility = Community_types.Community_public;
         indexable = false;
         discoverable = false;
-        onboarding_state = Community_types.Community_published }
+        onboarding_state = Community_types.Community_published;
+      }
 
-type publication_error =
-  | Not_a_network_community
-  | Community_already_published
+type publication_error = Not_a_network_community | Community_already_published
 
 let string_of_publication_error = function
   | Not_a_network_community -> "not a network community"
@@ -76,4 +76,5 @@ let lifecycle_state_valid ~is_network_community ~onboarding_state ~visibility
     | Community_types.Community_published ->
         (* Only the two published shapes exist: fully listed or fully
            unlisted. Mixed indexable/discoverable combinations are invalid. *)
-        visibility = Community_types.Community_public && indexable = discoverable
+        visibility = Community_types.Community_public
+        && indexable = discoverable

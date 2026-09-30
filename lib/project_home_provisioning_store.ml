@@ -15,10 +15,7 @@
 
 open Lwt.Infix
 
-type provisioned_home = {
-  slug : string;
-  status : Project_home_relation.status;
-}
+type provisioned_home = { slug : string; status : Project_home_relation.status }
 
 let community_slug { slug; _ } = slug
 let resulting_status { status; _ } = status
@@ -61,10 +58,8 @@ let positive id = Int64.compare id 0L > 0
 let lock_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.(t3 int64 string string))
-  "SELECT p.id, p.slug, p.verification_status \
-   FROM open_source_projects p \
-   WHERE p.slug = $1 AND p.verification_status = 'verified' \
-   FOR UPDATE OF p"
+    "SELECT p.id, p.slug, p.verification_status FROM open_source_projects p \
+     WHERE p.slug = $1 AND p.verification_status = 'verified' FOR UPDATE OF p"
 
 (* Step 1b: the actor's current steward row, with fresh GitHub evidence
    (stewardship authorizes new homes only while it does), locked second under the held
@@ -77,10 +72,9 @@ let lock_project_query =
 let lock_steward_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.string)
-  "SELECT role FROM project_stewards \
-   WHERE project_id = $1 AND user_id = $2 AND role = 'steward' \
-     AND github_evidence_is_fresh(github_verified_at) \
-   FOR UPDATE"
+    "SELECT role FROM project_stewards WHERE project_id = $1 AND user_id = $2 \
+     AND role = 'steward' AND github_evidence_is_fresh(github_verified_at) FOR \
+     UPDATE"
 
 (* Step 2: every active home relation for the locked project, under a
    locking read so a concurrently created row from a path that already
@@ -89,14 +83,10 @@ let lock_steward_query =
    predicate and never block. *)
 let lock_active_relations_query =
   let open Caqti_request.Infix in
-  (Caqti_type.int64
-   ->* Caqti_type.(t2 (t2 int64 int) (t2 string string)))
-  "SELECT id, community_id, relation_type, status \
-   FROM community_projects \
-   WHERE project_id = $1 \
-     AND relation_type = 'home' \
-     AND status IN ('pending', 'accepted') \
-   FOR UPDATE"
+  (Caqti_type.int64 ->* Caqti_type.(t2 (t2 int64 int) (t2 string string)))
+    "SELECT id, community_id, relation_type, status FROM community_projects \
+     WHERE project_id = $1 AND relation_type = 'home' AND status IN \
+     ('pending', 'accepted') FOR UPDATE"
 
 (* Step 3: exactly one new private draft network community with the parsed
    canonical identity. Lifecycle values are written explicitly — private,
@@ -109,17 +99,16 @@ let lock_active_relations_query =
 let insert_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 string string (option string))
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string (option string)))
-           (t2 (t2 string string) (t3 bool bool bool))))
-  "INSERT INTO communities \
-     (name, slug, description, sections_enabled, visibility, indexable, \
-      is_network_community, onboarding_state, discoverable) \
-   VALUES ($1, $2, $3, TRUE, 'private', FALSE, TRUE, 'draft', FALSE) \
-   ON CONFLICT (slug) DO NOTHING \
-   RETURNING id, name, slug, description, visibility, onboarding_state, \
-             is_network_community, indexable, discoverable"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int string) (t2 string (option string)))
+          (t2 (t2 string string) (t3 bool bool bool))))
+    "INSERT INTO communities (name, slug, description, sections_enabled, \
+     visibility, indexable, is_network_community, onboarding_state, \
+     discoverable) VALUES ($1, $2, $3, TRUE, 'private', FALSE, TRUE, 'draft', \
+     FALSE) ON CONFLICT (slug) DO NOTHING RETURNING id, name, slug, \
+     description, visibility, onboarding_state, is_network_community, \
+     indexable, discoverable"
 
 (* Step 4: the actor's initial membership, in the exact durable shape
    Membership_store.join_community writes — the two-column row is the whole schema. The
@@ -130,8 +119,8 @@ let insert_community_query =
 let insert_member_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.bool)
-  "INSERT INTO community_members (user_id, community_id) \
-   VALUES ($1, $2) RETURNING TRUE"
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2) \
+     RETURNING TRUE"
 
 (* Step 5: the actor as initial top moderator, in the exact durable shape
    Moderator_store.add_top_moderator writes (explicit 'top_mod' — the column default is
@@ -139,8 +128,8 @@ let insert_member_query =
 let insert_moderator_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.string)
-  "INSERT INTO community_moderators (user_id, community_id, role) \
-   VALUES ($1, $2, 'top_mod') RETURNING role"
+    "INSERT INTO community_moderators (user_id, community_id, role) VALUES \
+     ($1, $2, 'top_mod') RETURNING role"
 
 (* Step 6: the minimum community shell, byte-identical to what legacy
    creation writes and the default-structure migration backfilled — one
@@ -150,18 +139,15 @@ let insert_moderator_query =
 let insert_section_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.int)
-  "INSERT INTO community_sections \
-     (community_id, name, slug, description, position, default_sort, \
-      is_introduction_section) \
-   VALUES ($1, 'General', 'general', 'General discussion', 0, 'new', FALSE) \
-   RETURNING id"
+    "INSERT INTO community_sections (community_id, name, slug, description, \
+     position, default_sort, is_introduction_section) VALUES ($1, 'General', \
+     'general', 'General discussion', 0, 'new', FALSE) RETURNING id"
 
 let insert_channel_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.int)
-  "INSERT INTO channels (community_id, slug, name, topic, position) \
-   VALUES ($1, 'general', 'general', 'General chat', 0) \
-   RETURNING id"
+    "INSERT INTO channels (community_id, slug, name, topic, position) VALUES \
+     ($1, 'general', 'general', 'General chat', 0) RETURNING id"
 
 (* Step 7: the accepted home relation, inserted once in its final shape —
    never a pending row updated afterwards. No review provenance is
@@ -176,23 +162,19 @@ let insert_channel_query =
 let insert_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 int64 int string)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 int64) (t2 int string))
-           (t2 (t2 string bool) (t2 bool bool))))
-  "INSERT INTO community_projects \
-     (project_id, community_id, relation_type, status, \
-      requested_by_user_id, reviewed_by_user_id, request_note, \
-      reviewed_at, removed_at) \
-   VALUES ($1, $2, 'home', $3, NULL, NULL, NULL, NOW(), NULL) \
-   ON CONFLICT (project_id) \
-     WHERE relation_type = 'home' AND status IN ('pending', 'accepted') \
-   DO NOTHING \
-   RETURNING id, project_id, community_id, relation_type, status, \
-             requested_by_user_id IS NULL AND reviewed_by_user_id IS NULL \
-               AND request_note IS NULL, \
-             reviewed_at IS NOT NULL AND removed_at IS NULL, \
-             reviewed_at >= created_at AND updated_at >= created_at"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 int64) (t2 int string))
+          (t2 (t2 string bool) (t2 bool bool))))
+    "INSERT INTO community_projects (project_id, community_id, relation_type, \
+     status, requested_by_user_id, reviewed_by_user_id, request_note, \
+     reviewed_at, removed_at) VALUES ($1, $2, 'home', $3, NULL, NULL, NULL, \
+     NOW(), NULL) ON CONFLICT (project_id) WHERE relation_type = 'home' AND \
+     status IN ('pending', 'accepted') DO NOTHING RETURNING id, project_id, \
+     community_id, relation_type, status, requested_by_user_id IS NULL AND \
+     reviewed_by_user_id IS NULL AND request_note IS NULL, reviewed_at IS NOT \
+     NULL AND removed_at IS NULL, reviewed_at >= created_at AND updated_at >= \
+     created_at"
 
 (* Final complete-state validation: ten bounded aggregate reads on the
    same connection prove the transaction contains exactly the coherent
@@ -204,30 +186,23 @@ let insert_relation_query =
 let validate_state_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 int int int64)
-   ->! Caqti_type.(
-         t2 (t4 int int int int) (t2 (t4 int int int int) (t2 int int))))
-  "SELECT \
-     (SELECT COUNT(*) FROM community_members WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM community_members \
-      WHERE community_id = $1 AND user_id = $2), \
-     (SELECT COUNT(*) FROM community_moderators WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM community_moderators \
-      WHERE community_id = $1 AND user_id = $2 AND role = 'top_mod'), \
-     (SELECT COUNT(*) FROM community_sections WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM community_sections \
-      WHERE community_id = $1 AND slug = 'general' AND name = 'General' \
-        AND position = 0 AND default_sort = 'new' \
-        AND NOT is_introduction_section), \
-     (SELECT COUNT(*) FROM channels WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM channels \
-      WHERE community_id = $1 AND slug = 'general' AND name = 'general' \
-        AND position = 0 AND NOT is_archived), \
-     (SELECT COUNT(*) FROM community_projects \
-      WHERE project_id = $3 AND relation_type = 'home' \
-        AND status IN ('pending', 'accepted')), \
-     (SELECT COUNT(*) FROM community_projects \
-      WHERE project_id = $3 AND relation_type = 'home' \
-        AND status = 'pending')"
+  ->! Caqti_type.(
+        t2 (t4 int int int int) (t2 (t4 int int int int) (t2 int int))))
+    "SELECT (SELECT COUNT(*) FROM community_members WHERE community_id = $1), \
+     (SELECT COUNT(*) FROM community_members WHERE community_id = $1 AND \
+     user_id = $2), (SELECT COUNT(*) FROM community_moderators WHERE \
+     community_id = $1), (SELECT COUNT(*) FROM community_moderators WHERE \
+     community_id = $1 AND user_id = $2 AND role = 'top_mod'), (SELECT \
+     COUNT(*) FROM community_sections WHERE community_id = $1), (SELECT \
+     COUNT(*) FROM community_sections WHERE community_id = $1 AND slug = \
+     'general' AND name = 'General' AND position = 0 AND default_sort = 'new' \
+     AND NOT is_introduction_section), (SELECT COUNT(*) FROM channels WHERE \
+     community_id = $1), (SELECT COUNT(*) FROM channels WHERE community_id = \
+     $1 AND slug = 'general' AND name = 'general' AND position = 0 AND NOT \
+     is_archived), (SELECT COUNT(*) FROM community_projects WHERE project_id = \
+     $3 AND relation_type = 'home' AND status IN ('pending', 'accepted')), \
+     (SELECT COUNT(*) FROM community_projects WHERE project_id = $3 AND \
+     relation_type = 'home' AND status = 'pending')"
 
 let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
     ~identity =
@@ -255,34 +230,33 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
       (* As in the sibling stores, every Caqti error is dropped
          payload-free — error payloads can echo SQL parameters — and
          rollback failure adds nothing a caller may act on either. *)
-      let rollback_to err =
-        C.rollback () >>= fun _ -> Lwt.return (Error err)
-      in
+      let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
 
       (* The returned community must be byte-exactly the parsed identity
          in exactly the private-draft network lifecycle — anything else is
          corruption, never carried forward. *)
       let community_ok
           ( ((community_row_id, stored_name), (stored_slug, stored_description)),
-            ((visibility_raw, onboarding_raw), (network, indexable, discoverable))
-          ) =
+            ( (visibility_raw, onboarding_raw),
+              (network, indexable, discoverable) ) ) =
         community_row_id > 0
         && String.equal stored_name name
         && String.equal stored_slug requested_slug
         && Option.equal String.equal stored_description description
-        && network
-        && (not indexable)
-        && (not discoverable)
+        && network && (not indexable) && (not discoverable)
         &&
         match
           ( Community_types.community_visibility_of_string visibility_raw,
-            Community_types.community_onboarding_state_of_string onboarding_raw )
+            Community_types.community_onboarding_state_of_string onboarding_raw
+          )
         with
-        | Some Community_types.Community_private, Ok Community_types.Community_draft ->
+        | ( Some Community_types.Community_private,
+            Ok Community_types.Community_draft ) ->
             Network_communities.lifecycle_state_valid
               ~is_network_community:network
               ~onboarding_state:Community_types.Community_draft
-              ~visibility:Community_types.Community_private ~indexable ~discoverable
+              ~visibility:Community_types.Community_private ~indexable
+              ~discoverable
         | _, _ -> false
       in
 
@@ -304,10 +278,10 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
           (community_row_id, actor_user_id, project_row_id)
         >>= function
         | Error _ -> rollback_to Storage_error
-        | Ok counts ->
+        | Ok counts -> (
             if counts <> ((1, 1, 1, 1), ((1, 1, 1, 1), (1, 0))) then
               rollback_to Inconsistent_data
-            else (
+            else
               (* The audit event rides the same transaction as the whole
                  draft: inserted only after the complete provisioned state
                  validated, and any audit failure rolls back community,
@@ -337,12 +311,11 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
         | Error _ -> rollback_to Storage_error
         | Ok None -> rollback_to Active_home_exists
         | Ok (Some returned) ->
-            if not (relation_ok project_row_id community_row_id returned)
-            then rollback_to Inconsistent_data
+            if not (relation_ok project_row_id community_row_id returned) then
+              rollback_to Inconsistent_data
             else
               let ((relation_row_id, _), _), _ = returned in
-              commit_validated project_row_id community_row_id
-                relation_row_id
+              commit_validated project_row_id community_row_id relation_row_id
       in
 
       (* Steps 4–6 share one shape: a fresh-row insert whose RETURNING
@@ -358,17 +331,16 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
             >>= function
             | Error _ -> rollback_to Storage_error
             | Ok None -> rollback_to Inconsistent_data
-            | Ok (Some role) ->
+            | Ok (Some role) -> (
                 if not (String.equal role "top_mod") then
                   rollback_to Inconsistent_data
-                else (
-                  C.find_opt insert_section_query community_row_id
-                  >>= function
+                else
+                  C.find_opt insert_section_query community_row_id >>= function
                   | Error _ -> rollback_to Storage_error
                   | Ok None -> rollback_to Inconsistent_data
-                  | Ok (Some section_id) ->
+                  | Ok (Some section_id) -> (
                       if section_id <= 0 then rollback_to Inconsistent_data
-                      else (
+                      else
                         C.find_opt insert_channel_query community_row_id
                         >>= function
                         | Error _ -> rollback_to Storage_error
@@ -376,8 +348,8 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                         | Ok (Some channel_id) ->
                             if channel_id <= 0 then
                               rollback_to Inconsistent_data
-                            else insert_relation project_row_id
-                                   community_row_id)))
+                            else insert_relation project_row_id community_row_id
+                      )))
       in
 
       let insert_community project_row_id =
@@ -393,12 +365,10 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
       in
 
       let arbitrate_active_home project_row_id =
-        C.collect_list lock_active_relations_query project_row_id
-        >>= function
+        C.collect_list lock_active_relations_query project_row_id >>= function
         | Error _ -> rollback_to Storage_error
         | Ok [] -> insert_community project_row_id
-        | Ok [ ((relation_id, community_id), (relation_type, status_raw)) ]
-          ->
+        | Ok [ ((relation_id, community_id), (relation_type, status_raw)) ] ->
             (* One active row: validated defensively before it blocks —
                a malformed "active" row is corruption, not a home. *)
             let valid =
@@ -429,14 +399,14 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                  steward check even runs, so the store cannot probe
                  projects. *)
               rollback_to Project_unavailable
-          | Ok (Some (project_row_id, stored_slug, stored_verification)) ->
+          | Ok (Some (project_row_id, stored_slug, stored_verification)) -> (
               if
                 not
                   (positive project_row_id
                   && String.equal stored_slug project_slug
                   && String.equal stored_verification "verified")
               then rollback_to Inconsistent_data
-              else (
+              else
                 C.find_opt lock_steward_query (project_row_id, actor_user_id)
                 >>= function
                 | Error _ -> rollback_to Storage_error

@@ -22,7 +22,7 @@ open Lwt.Infix
 let delete_for_user_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->. Caqti_type.unit)
-  "DELETE FROM dream_session WHERE payload::jsonb ->> 'user_id' = $1"
+    "DELETE FROM dream_session WHERE payload::jsonb ->> 'user_id' = $1"
 
 let delete_for_user (module C : Caqti_lwt.CONNECTION) user_id =
   C.exec delete_for_user_query (string_of_int user_id) >>= function
@@ -32,7 +32,7 @@ let delete_for_user (module C : Caqti_lwt.CONNECTION) user_id =
 let update_password_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int) ->. Caqti_type.unit)
-  "UPDATE users SET password_hash = $1 WHERE id = $2"
+    "UPDATE users SET password_hash = $1 WHERE id = $2"
 
 (* An authenticated password change carries the same invariant as
    reset_password_atomically: the new password must end every session the
@@ -46,35 +46,37 @@ let update_password_query =
 let delete_reset_tokens_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM password_resets WHERE user_id = $1"
+    "DELETE FROM password_resets WHERE user_id = $1"
 
-let update_password_revoking_sessions (module C: Caqti_lwt.CONNECTION) user_id new_hash =
+let update_password_revoking_sessions (module C : Caqti_lwt.CONNECTION) user_id
+    new_hash =
   C.start () >>= function
   | Error e -> Lwt.return (Error (Caqti_error.show e))
-  | Ok () ->
-    (C.exec update_password_query (new_hash, user_id) >>= function
-    | Error e ->
-        C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-    | Ok () ->
-        (C.exec delete_reset_tokens_query user_id >>= function
-        | Error e ->
-            C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-        | Ok () ->
-        (delete_for_user (module C) user_id >>= function
-         | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
-         | Ok () ->
-             C.commit () >>= function
-             | Error e -> Lwt.return (Error (Caqti_error.show e))
-             | Ok () -> Lwt.return (Ok ()))))
+  | Ok () -> (
+      C.exec update_password_query (new_hash, user_id) >>= function
+      | Error e ->
+          C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+      | Ok () -> (
+          C.exec delete_reset_tokens_query user_id >>= function
+          | Error e ->
+              C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+          | Ok () -> (
+              delete_for_user (module C) user_id >>= function
+              | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+              | Ok () -> (
+                  C.commit () >>= function
+                  | Error e -> Lwt.return (Error (Caqti_error.show e))
+                  | Ok () -> Lwt.return (Ok ())))))
 
 (* UPDATE+RETURNING atomically consumes the token — avoids TOCTOU race of a separate
    SELECT then UPDATE, and prevents replay on concurrent verification attempts. *)
 let verify_email_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.string)
-  "UPDATE users SET is_email_verified = TRUE, verification_token = NULL WHERE verification_token = $1 RETURNING username"
+    "UPDATE users SET is_email_verified = TRUE, verification_token = NULL \
+     WHERE verification_token = $1 RETURNING username"
 
-let verify_email (module C: Caqti_lwt.CONNECTION) token =
+let verify_email (module C : Caqti_lwt.CONNECTION) token =
   C.find_opt verify_email_query token >>= function
   | Ok res -> Lwt.return (Ok res)
   | Error e -> Lwt.return (Error (Caqti_error.show e))
@@ -90,9 +92,9 @@ let hash_token raw = Digestif.SHA256.(digest_string raw |> to_hex)
 let create_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string string) ->? Caqti_type.int)
-  "INSERT INTO password_resets (token, user_id, expires_at)
-   SELECT $1, id, NOW() + INTERVAL '2 hours' FROM users WHERE email = $2
-   RETURNING user_id"
+    "INSERT INTO password_resets (token, user_id, expires_at)\n\
+    \   SELECT $1, id, NOW() + INTERVAL '2 hours' FROM users WHERE email = $2\n\
+    \   RETURNING user_id"
 
 let create_token (module C : Caqti_lwt.CONNECTION) email raw_token =
   let token_hash = hash_token raw_token in
@@ -104,7 +106,8 @@ let create_token (module C : Caqti_lwt.CONNECTION) email raw_token =
 let validate_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.int)
-  "SELECT user_id FROM password_resets WHERE token = $1 AND expires_at > NOW()"
+    "SELECT user_id FROM password_resets WHERE token = $1 AND expires_at > \
+     NOW()"
 
 let validate_token (module C : Caqti_lwt.CONNECTION) raw_token =
   let token_hash = hash_token raw_token in
@@ -115,7 +118,8 @@ let validate_token (module C : Caqti_lwt.CONNECTION) raw_token =
 let consume_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.int)
-  "DELETE FROM password_resets WHERE token = $1 AND expires_at > NOW() RETURNING user_id"
+    "DELETE FROM password_resets WHERE token = $1 AND expires_at > NOW() \
+     RETURNING user_id"
 
 (* Every other outstanding link for the account dies with the one used: a
    reset is the remedy for a compromised account, and an older link (say,
@@ -123,44 +127,47 @@ let consume_query =
 let consume_others_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM password_resets WHERE user_id = $1"
+    "DELETE FROM password_resets WHERE user_id = $1"
 
 (* Separate query to avoid a cross-module reference to Security.update_password_query. *)
 let update_pw_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int) ->. Caqti_type.unit)
-  "UPDATE users SET password_hash = $1 WHERE id = $2"
+    "UPDATE users SET password_hash = $1 WHERE id = $2"
 
 (* Wraps DELETE+UPDATE in a single transaction so that if the UPDATE fails the
    token is rolled back — user retains the reset link rather than being locked out.
    Argon2 hashing must be done BEFORE calling this so no CPU work stalls the txn. *)
-let reset_password_atomically (module C : Caqti_lwt.CONNECTION) raw_token new_hash =
+let reset_password_atomically (module C : Caqti_lwt.CONNECTION) raw_token
+    new_hash =
   C.start () >>= function
   | Error e -> Lwt.return (Error (Caqti_error.show e))
-  | Ok () ->
-    (C.find_opt consume_query (hash_token raw_token) >>= function
-    | Error e ->
-        C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-    | Ok None ->
-        (* Token not found or expired — nothing to roll back. *)
-        C.rollback () >>= fun _ -> Lwt.return (Ok false)
-    | Ok (Some user_id) ->
-        (C.exec update_pw_query (new_hash, user_id) >>= function
-        | Error e ->
-            C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-        | Ok () ->
-        (C.exec consume_others_query user_id >>= function
-        | Error e ->
-            C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-        | Ok () ->
-            (* A password reset is the remedy for a compromised account, so
+  | Ok () -> (
+      C.find_opt consume_query (hash_token raw_token) >>= function
+      | Error e ->
+          C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+      | Ok None ->
+          (* Token not found or expired — nothing to roll back. *)
+          C.rollback () >>= fun _ -> Lwt.return (Ok false)
+      | Ok (Some user_id) -> (
+          C.exec update_pw_query (new_hash, user_id) >>= function
+          | Error e ->
+              C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+          | Ok () -> (
+              C.exec consume_others_query user_id >>= function
+              | Error e ->
+                  C.rollback () >>= fun _ ->
+                  Lwt.return (Error (Caqti_error.show e))
+              | Ok () -> (
+                  (* A password reset is the remedy for a compromised account, so
                it must also end the attacker's sessions — otherwise the new
                password changes nothing for whoever already holds a cookie.
                Same transaction as the token consumption and the password
                write: either all three land or none does. *)
-            (delete_for_user (module C) user_id >>= function
-             | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
-             | Ok () ->
-                 C.commit () >>= function
-                 | Error e -> Lwt.return (Error (Caqti_error.show e))
-                 | Ok () -> Lwt.return (Ok true)))))
+                  delete_for_user (module C) user_id
+                  >>= function
+                  | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+                  | Ok () -> (
+                      C.commit () >>= function
+                      | Error e -> Lwt.return (Error (Caqti_error.show e))
+                      | Ok () -> Lwt.return (Ok true))))))

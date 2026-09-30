@@ -5,7 +5,9 @@
 let temporarily_unavailable ~return_url request =
   Dream.respond ~status:`Service_Unavailable
     (Site_pages.msg_page ~auth:true ~title:"Temporarily unavailable"
-       ~message:"We can't process this request right now. Please try again in a few minutes."
+       ~message:
+         "We can't process this request right now. Please try again in a few \
+          minutes."
        ~alert_type:"error" ~return_url request)
 
 (* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
@@ -20,7 +22,6 @@ let temporarily_unavailable ~return_url request =
    Allowed/Blocked decision. A racing double-fire between the read and the
    write of [last_cleanup] just runs a second idempotent batch. *)
 let cleanup_every_seconds = 600.0
-
 let last_cleanup = ref 0.0
 
 let maybe_cleanup request =
@@ -38,8 +39,7 @@ let maybe_cleanup request =
                 Dream.log "rate-limit cleanup failed: %s" e;
                 Lwt.return_unit)
           (fun exn ->
-            Dream.log "rate-limit cleanup skipped: %s"
-              (Printexc.to_string exn);
+            Dream.log "rate-limit cleanup skipped: %s" (Printexc.to_string exn);
             Lwt.return_unit))
   end
 
@@ -63,7 +63,8 @@ let make_middleware ~check ~cleanup inner_handler request =
   (* Cleanup is best effort and must not be able to change the decision
      below, even by raising synchronously. *)
   (try cleanup request
-   with exn -> Dream.log "rate-limit cleanup skipped: %s" (Printexc.to_string exn));
+   with exn ->
+     Dream.log "rate-limit cleanup skipped: %s" (Printexc.to_string exn));
   let%lwt decision =
     Lwt.catch
       (fun () ->
@@ -81,9 +82,10 @@ let make_middleware ~check ~cleanup inner_handler request =
       (* The blocked page's return link reuses the path-only endpoint: echoing
          the full target would leak query secrets (OAuth code/state, reset
          tokens) into the rendered HTML. *)
-      Dream.html (Site_pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
-        ~message:"Too many attempts. Please try again later."
-        ~alert_type:"error" ~return_url:endpoint request)
+      Dream.html
+        (Site_pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
+           ~message:"Too many attempts. Please try again later."
+           ~alert_type:"error" ~return_url:endpoint request)
   | `Unavailable ->
       (* Neither the IP nor the storage error is logged: the error text can
          carry connection and query detail, and the bucket key is an IP. *)
@@ -91,5 +93,5 @@ let make_middleware ~check ~cleanup inner_handler request =
       temporarily_unavailable ~return_url:endpoint request
 
 let middleware inner_handler request =
-  make_middleware ~check:check_in_database ~cleanup:maybe_cleanup
-    inner_handler request
+  make_middleware ~check:check_in_database ~cleanup:maybe_cleanup inner_handler
+    request

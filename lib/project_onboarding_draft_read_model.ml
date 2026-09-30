@@ -37,19 +37,13 @@ type draft_summary = {
   has_primary_repository : bool;
 }
 
-type draft_view = {
-  summary : draft_summary;
-  repositories : repository list;
-}
+type draft_view = { summary : draft_summary; repositories : repository list }
 
 let draft_id (s : draft_summary) = s.draft_id
 let account_login (s : draft_summary) = s.account_login
 let account_type (s : draft_summary) = s.account_type
 let repository_count (s : draft_summary) = s.repository_count
-
-let selected_repository_count (s : draft_summary) =
-  s.selected_repository_count
-
+let selected_repository_count (s : draft_summary) = s.selected_repository_count
 let has_primary_repository (s : draft_summary) = s.has_primary_repository
 let summary (v : draft_view) = v.summary
 let repositories (v : draft_view) = v.repositories
@@ -119,10 +113,8 @@ let account_type_of_db value =
    by a live installation. connected_by_user_id is provenance and never
    appears here; d.user_id is the only owner. *)
 let availability_sql =
-  "d.status = 'active' \
-   AND d.expires_at > NOW() \
-   AND i.status = 'active' \
-   AND i.revoked_at IS NULL"
+  "d.status = 'active' AND d.expires_at > NOW() AND i.status = 'active' AND \
+   i.revoked_at IS NULL"
 
 (* The INNER JOIN on snapshot rows silently drops a corrupted zero-repo
    draft from the list — it is unusable, and listing surfaces no
@@ -131,18 +123,14 @@ let availability_sql =
    that qualified the draft. *)
 let list_available_query =
   let open Caqti_request.Infix in
-  (Caqti_type.int
-   ->* Caqti_type.(t2 (t3 int64 string string) (t3 int int int)))
-  ("SELECT d.id, i.github_account_login, i.github_account_type, \
-           COUNT(*)::int, \
-           COUNT(*) FILTER (WHERE r.is_selected)::int, \
-           COUNT(*) FILTER (WHERE r.is_primary)::int \
-    FROM project_onboarding_drafts d \
-    JOIN github_installations i ON i.id = d.github_installation_record_id \
-    JOIN project_onboarding_draft_repositories r ON r.draft_id = d.id \
-    WHERE d.user_id = $1 AND " ^ availability_sql
-  ^ " GROUP BY d.id, i.id \
-     ORDER BY d.updated_at DESC, d.id DESC")
+  (Caqti_type.int ->* Caqti_type.(t2 (t3 int64 string string) (t3 int int int)))
+    ("SELECT d.id, i.github_account_login, i.github_account_type, \
+      COUNT(*)::int, COUNT(*) FILTER (WHERE r.is_selected)::int, COUNT(*) \
+      FILTER (WHERE r.is_primary)::int FROM project_onboarding_drafts d JOIN \
+      github_installations i ON i.id = d.github_installation_record_id JOIN \
+      project_onboarding_draft_repositories r ON r.draft_id = d.id WHERE \
+      d.user_id = $1 AND " ^ availability_sql
+   ^ " GROUP BY d.id, i.id ORDER BY d.updated_at DESC, d.id DESC")
 
 (* Caqti row type for one snapshot row, nested per the house convention. *)
 let repository_row =
@@ -163,17 +151,16 @@ let repository_row =
 let load_available_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->* Caqti_type.(t2 (t3 int64 string string) (option repository_row)))
-  ("SELECT d.id, i.github_account_login, i.github_account_type, \
-           r.id, r.position, r.github_repository_id, r.github_owner_id, \
-           r.owner_login, r.name, r.full_name, r.html_url, \
-           r.description, r.default_branch, \
-           r.is_archived, r.is_selected, r.is_primary \
-    FROM project_onboarding_drafts d \
-    JOIN github_installations i ON i.id = d.github_installation_record_id \
-    LEFT JOIN project_onboarding_draft_repositories r ON r.draft_id = d.id \
-    WHERE d.id = $1 AND d.user_id = $2 AND " ^ availability_sql
-  ^ " ORDER BY r.position")
+  ->* Caqti_type.(t2 (t3 int64 string string) (option repository_row)))
+    ("SELECT d.id, i.github_account_login, i.github_account_type, r.id, \
+      r.position, r.github_repository_id, r.github_owner_id, r.owner_login, \
+      r.name, r.full_name, r.html_url, r.description, r.default_branch, \
+      r.is_archived, r.is_selected, r.is_primary FROM \
+      project_onboarding_drafts d JOIN github_installations i ON i.id = \
+      d.github_installation_record_id LEFT JOIN \
+      project_onboarding_draft_repositories r ON r.draft_id = d.id WHERE d.id \
+      = $1 AND d.user_id = $2 AND " ^ availability_sql ^ " ORDER BY r.position"
+    )
 
 (* Every structural rule one row must satisfy on its own. Errors are
    deliberately unit: which rule failed on which value must not travel. *)
@@ -192,8 +179,8 @@ let repository_of_row
     && String.equal html_url (canonical_html_url ~owner_login ~name)
     && valid_branch default_branch
     && (match description with
-       | None -> true
-       | Some text -> valid_description text)
+      | None -> true
+      | Some text -> valid_description text)
     && ((not is_primary) || is_selected)
   in
   if valid then
@@ -268,7 +255,9 @@ let validate_snapshot rows =
 let summary_of_counts (draft_row_id, login, type_string)
     (repo_count, selected_count, primary_count) =
   if
-    repo_count < 1 || repo_count > snapshot_limit || selected_count < 0
+    repo_count < 1
+    || repo_count > snapshot_limit
+    || selected_count < 0
     || selected_count > repo_count
     || primary_count < 0 || primary_count > 1
     || (primary_count = 1 && selected_count < 1)
@@ -352,5 +341,5 @@ let load_available (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id =
                 | Error () -> Error Inconsistent_data
                 | Ok view_summary ->
                     Ok
-                      (Some
-                         { summary = view_summary; repositories = validated }))))
+                      (Some { summary = view_summary; repositories = validated })
+                )))

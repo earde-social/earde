@@ -14,9 +14,7 @@
    Dream process still yields production attributes. Nothing here logs
    cookie names, values, or any onboarding material. *)
 
-type load_error =
-  | Missing
-  | Invalid
+type load_error = Missing | Invalid
 
 (* Both registered GitHub return paths sit under this prefix; anything
    broader would send the material to unrelated pages. *)
@@ -32,10 +30,7 @@ let max_age = 900.
    fall back to a non-Secure production cookie. *)
 exception Invalid_public_origin_scheme
 
-type policy = {
-  prefix : [ `Host | `Secure ] option;
-  secure : bool;
-}
+type policy = { prefix : [ `Host | `Secure ] option; secure : bool }
 
 (* __Secure-, not __Host-: the __Host- prefix requires Path=/, which would
    conflict with the deliberately narrow integration path. *)

@@ -6,10 +6,7 @@
    means Off, and the raw environment value is never logged so a typo'd or
    accidentally-secret value cannot leak. *)
 
-type mode =
-  | Off
-  | Admins
-  | Public
+type mode = Off | Admins | Public
 
 let env_var = "EARDE_GITHUB_ONBOARDING_ENABLED"
 
@@ -35,19 +32,13 @@ let mode_to_string = function
   | Public -> "public"
 
 let onboarding_available mode ~is_admin =
-  match mode with
-  | Off -> false
-  | Admins -> is_admin
-  | Public -> true
+  match mode with Off -> false | Admins -> is_admin | Public -> true
 
 (* Deliberately independent of [mode]: setting GitHub onboarding to Public
    must never reopen arbitrary community creation. *)
 let can_use_legacy_community_creation ~is_admin = is_admin
 
-type legacy_creation_decision =
-  | Show_form
-  | Redirect_to_bring
-  | Forbid
+type legacy_creation_decision = Show_form | Redirect_to_bring | Forbid
 
 let legacy_creation_get_decision ~is_admin =
   if can_use_legacy_community_creation ~is_admin then Show_form

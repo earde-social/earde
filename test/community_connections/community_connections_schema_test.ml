@@ -9,19 +9,12 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let or_fail = Db_fixture.or_fail
-
 let reject = Db_fixture.reject
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let collect = Db_fixture.collect
-
 let insert_community = Community_fixture.insert_community
-
 let contains haystack needle = Html_assert.occurs haystack ~needle
 
 (* Audit events RESTRICT-protect both their connection and both communities,
@@ -30,18 +23,17 @@ let contains haystack needle = Html_assert.occurs haystack ~needle
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM community_connection_audit_events \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccns-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccns-%')"
-    ; "DELETE FROM community_connections \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccns-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccns-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'ccns-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ccns_%'"
+    [
+      "DELETE FROM community_connection_audit_events WHERE \
+       requester_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccns-%') OR recipient_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'ccns-%')";
+      "DELETE FROM community_connections WHERE requester_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'ccns-%') OR \
+       recipient_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccns-%')";
+      "DELETE FROM communities WHERE slug LIKE 'ccns-%'";
+      "DELETE FROM users WHERE username LIKE 'ccns_%'";
     ]
 
 let db_case name f =
@@ -64,8 +56,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* Raw row fixtures. Every interpolated fragment is either a fixture row id
    produced in this file or a literal written here — no external or user
@@ -82,14 +73,13 @@ let row_sql ~requester ~recipient ?(status = "'pending'") ?(note = "NULL")
     ?(created = "NOW()") ?(updated = "NOW()") ?(reviewed = "NULL")
     ?(removed = "NULL") () =
   Printf.sprintf
-    "INSERT INTO community_connections \
-       (requester_community_id, recipient_community_id, status, \
-        request_note, requested_by_user_id, reviewed_by_user_id, \
-        removed_by_user_id, created_at, updated_at, reviewed_at, \
-        removed_at) \
-     VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-    requester recipient status note requested_by reviewed_by removed_by
-    created updated reviewed removed
+    "INSERT INTO community_connections (requester_community_id, \
+     recipient_community_id, status, request_note, requested_by_user_id, \
+     reviewed_by_user_id, removed_by_user_id, created_at, updated_at, \
+     reviewed_at, removed_at) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, \
+     %s)"
+    requester recipient status note requested_by reviewed_by removed_by created
+    updated reviewed removed
 
 let accepts conn label sql =
   let* r = try_stmt conn sql in
@@ -102,74 +92,65 @@ let refuses conn label sql =
 
 let q_count_pair =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connections \
-   WHERE LEAST(requester_community_id, recipient_community_id) \
-         = LEAST($1, $2) \
-     AND GREATEST(requester_community_id, recipient_community_id) \
-         = GREATEST($1, $2)"
+    "SELECT COUNT(*) FROM community_connections WHERE \
+     LEAST(requester_community_id, recipient_community_id) = LEAST($1, $2) AND \
+     GREATEST(requester_community_id, recipient_community_id) = GREATEST($1, \
+     $2)"
 
 let q_actors =
-  (Caqti_type.int64
-   ->! Caqti_type.(t3 (option int) (option int) (option int)))
-  "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id \
-   FROM community_connections WHERE id = $1"
+  (Caqti_type.int64 ->! Caqti_type.(t3 (option int) (option int) (option int)))
+    "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id FROM \
+     community_connections WHERE id = $1"
 
 let q_sole_id =
   (Caqti_type.(t2 int int) ->! Caqti_type.int64)
-  "SELECT id FROM community_connections \
-   WHERE LEAST(requester_community_id, recipient_community_id) \
-         = LEAST($1, $2) \
-     AND GREATEST(requester_community_id, recipient_community_id) \
-         = GREATEST($1, $2) \
-   ORDER BY id LIMIT 1"
+    "SELECT id FROM community_connections WHERE LEAST(requester_community_id, \
+     recipient_community_id) = LEAST($1, $2) AND \
+     GREATEST(requester_community_id, recipient_community_id) = GREATEST($1, \
+     $2) ORDER BY id LIMIT 1"
 
 let q_absent_community_id =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
 
 let q_indexdefs =
   (Caqti_type.string ->* Caqti_type.string)
-  "SELECT indexdef FROM pg_indexes \
-   WHERE schemaname = 'public' AND tablename = $1 ORDER BY indexname"
+    "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename \
+     = $1 ORDER BY indexname"
 
 let q_fk_deltypes =
   (Caqti_type.string ->* Caqti_type.(t2 string string))
-  "SELECT conname, confdeltype::text FROM pg_constraint \
-   WHERE conrelid = $1::regclass AND contype = 'f' ORDER BY conname"
+    "SELECT conname, confdeltype::text FROM pg_constraint WHERE conrelid = \
+     $1::regclass AND contype = 'f' ORDER BY conname"
 
 let q_text_columns =
   (Caqti_type.unit ->* Caqti_type.string)
-  "SELECT column_name FROM information_schema.columns \
-   WHERE table_schema = 'public' \
-     AND table_name = 'community_connection_audit_events' \
-     AND data_type NOT IN ('integer', 'bigint', \
-                           'timestamp with time zone') \
-   ORDER BY column_name"
+    "SELECT column_name FROM information_schema.columns WHERE table_schema = \
+     'public' AND table_name = 'community_connection_audit_events' AND \
+     data_type NOT IN ('integer', 'bigint', 'timestamp with time zone') ORDER \
+     BY column_name"
 
 let q_delete_user =
   (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
 
 let q_delete_community =
-  (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM communities WHERE id = $1"
+  (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM communities WHERE id = $1"
 
 let q_insert_audit =
   (Caqti_type.(t2 (t2 string (option int)) (t3 int64 int int))
-   ->! Caqti_type.int64)
-  "INSERT INTO community_connection_audit_events \
-     (action, actor_user_id, connection_id, requester_community_id, \
-      recipient_community_id) \
-   VALUES ($1, $2, $3, $4, $5) RETURNING id"
+  ->! Caqti_type.int64)
+    "INSERT INTO community_connection_audit_events (action, actor_user_id, \
+     connection_id, requester_community_id, recipient_community_id) VALUES \
+     ($1, $2, $3, $4, $5) RETURNING id"
 
 let q_audit_actor =
   (Caqti_type.int64 ->! Caqti_type.(option int))
-  "SELECT actor_user_id FROM community_connection_audit_events \
-   WHERE id = $1"
+    "SELECT actor_user_id FROM community_connection_audit_events WHERE id = $1"
 
 let q_audit_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connection_audit_events \
-   WHERE connection_id = $1"
+    "SELECT COUNT(*) FROM community_connection_audit_events WHERE \
+     connection_id = $1"
 
 let two_communities conn tag =
   let* a = insert_community conn ("ccns-" ^ tag ^ "-a") in
@@ -184,8 +165,8 @@ let valid_shapes_case =
       let* uid = insert_user conn "ccns_actor" in
       let actor = string_of_int uid in
       let* () =
-        accepts conn "pending" (row_sql ~requester:a ~recipient:b
-                                  ~requested_by:actor ())
+        accepts conn "pending"
+          (row_sql ~requester:a ~recipient:b ~requested_by:actor ())
       in
       (* The active slot is per unordered pair, so each further shape goes
          on its own pair. *)
@@ -217,14 +198,14 @@ let self_connection_case =
       refuses conn "self pair" (row_sql ~requester:a ~recipient:a ()))
 
 let status_vocabulary_case =
-  db_case "schema: only the four canonical statuses are storable"
-    (fun conn ->
+  db_case "schema: only the four canonical statuses are storable" (fun conn ->
       let* a, b = two_communities conn "vocab" in
       Lwt_list.iter_s
         (fun raw ->
           refuses conn ("status " ^ raw)
             (row_sql ~requester:a ~recipient:b
-               ~status:(Printf.sprintf "'%s'" raw) ~reviewed:"NOW()" ()))
+               ~status:(Printf.sprintf "'%s'" raw)
+               ~reviewed:"NOW()" ()))
         [ "Pending"; "PENDING"; "active"; "connected"; "cancelled"; "" ])
 
 let note_length_case =
@@ -295,22 +276,24 @@ let reviewed_shape_case =
         (fun status ->
           let quoted = Printf.sprintf "'%s'" status in
           let* () =
-            refuses conn (status ^ " without reviewed_at")
+            refuses conn
+              (status ^ " without reviewed_at")
               (row_sql ~requester:a ~recipient:b ~status:quoted ())
           in
           let* () =
-            refuses conn (status ^ " with removed_at")
+            refuses conn
+              (status ^ " with removed_at")
               (row_sql ~requester:a ~recipient:b ~status:quoted
                  ~reviewed:"NOW()" ~removed:"NOW()" ())
           in
-          refuses conn (status ^ " with a remover")
-            (row_sql ~requester:a ~recipient:b ~status:quoted
-               ~reviewed:"NOW()" ~removed_by:actor ()))
+          refuses conn
+            (status ^ " with a remover")
+            (row_sql ~requester:a ~recipient:b ~status:quoted ~reviewed:"NOW()"
+               ~removed_by:actor ()))
         [ "accepted"; "rejected" ])
 
 let removed_shape_case =
-  db_case "schema: a removed row keeps the review that preceded it"
-    (fun conn ->
+  db_case "schema: a removed row keeps the review that preceded it" (fun conn ->
       let* a, b = two_communities conn "xshape" in
       let* () =
         refuses conn "removed without removed_at"
@@ -318,8 +301,8 @@ let removed_shape_case =
              ~reviewed:"NOW()" ())
       in
       refuses conn "removed without reviewed_at"
-        (row_sql ~requester:a ~recipient:b ~status:"'removed'"
-           ~removed:"NOW()" ()))
+        (row_sql ~requester:a ~recipient:b ~status:"'removed'" ~removed:"NOW()"
+           ()))
 
 let nullable_actors_case =
   db_case "schema: every actor column is optional and survives deletion"
@@ -362,7 +345,9 @@ let missing_community_case =
 let one_active_pair_case =
   db_case "schema: one active connection per unordered pair" (fun conn ->
       let* a, b = two_communities conn "slot" in
-      let* () = accepts conn "first pending" (row_sql ~requester:a ~recipient:b ()) in
+      let* () =
+        accepts conn "first pending" (row_sql ~requester:a ~recipient:b ())
+      in
       let* () =
         refuses conn "second pending, same direction"
           (row_sql ~requester:a ~recipient:b ())
@@ -412,8 +397,8 @@ let index_shape_case =
   db_case "schema: the declared indexes exist with the intended shape"
     (fun conn ->
       let* defs = collect conn "indexes" q_indexdefs "community_connections" in
-      Alcotest.(check int) "one primary key plus four indexes" 5
-        (List.length defs);
+      Alcotest.(check int)
+        "one primary key plus four indexes" 5 (List.length defs);
       let joined = String.concat "\n" defs in
       let unique =
         List.filter
@@ -423,29 +408,31 @@ let index_shape_case =
       in
       (match unique with
       | [ d ] ->
-          Alcotest.(check bool) "active-pair index is partial" true
-            (contains d "WHERE" && contains d "pending"
-           && contains d "accepted")
+          Alcotest.(check bool)
+            "active-pair index is partial" true
+            (contains d "WHERE" && contains d "pending" && contains d "accepted")
       | l ->
           Alcotest.failf "expected one unordered-pair unique index, found %d"
             (List.length l));
-      Alcotest.(check bool) "an incoming-queue index exists" true
+      Alcotest.(check bool)
+        "an incoming-queue index exists" true
         (contains joined "recipient_community_id, status, created_at");
-      Alcotest.(check bool) "an outgoing-queue index exists" true
+      Alcotest.(check bool)
+        "an outgoing-queue index exists" true
         (contains joined "requester_community_id, status, created_at");
       let* audit_defs =
         collect conn "audit indexes" q_indexdefs
           "community_connection_audit_events"
       in
-      Alcotest.(check int) "one primary key plus four audit indexes" 5
-        (List.length audit_defs);
+      Alcotest.(check int)
+        "one primary key plus four audit indexes" 5 (List.length audit_defs);
       Lwt.return_unit)
 
 let deletion_behavior_case =
   db_case "schema: foreign keys cascade the pair and null the actors"
     (fun conn ->
-      let* rows = collect conn "connection fks" q_fk_deltypes
-          "community_connections"
+      let* rows =
+        collect conn "connection fks" q_fk_deltypes "community_connections"
       in
       let of_kind kind =
         List.filter (fun (_, d) -> d = kind) rows |> List.length
@@ -460,12 +447,11 @@ let deletion_behavior_case =
       let audit_of_kind kind =
         List.filter (fun (_, d) -> d = kind) audit_rows |> List.length
       in
-      Alcotest.(check int) "the audit actor is set null" 1
-        (audit_of_kind "n");
-      Alcotest.(check int) "every audit subject is protected" 3
-        (audit_of_kind "a");
-      Alcotest.(check int) "no other audit deletion behavior" 4
-        (List.length audit_rows);
+      Alcotest.(check int) "the audit actor is set null" 1 (audit_of_kind "n");
+      Alcotest.(check int)
+        "every audit subject is protected" 3 (audit_of_kind "a");
+      Alcotest.(check int)
+        "no other audit deletion behavior" 4 (List.length audit_rows);
       Lwt.return_unit)
 
 (* === the audit table === *)
@@ -473,7 +459,9 @@ let deletion_behavior_case =
 let audit_vocabulary_case =
   db_case "schema: the audit action vocabulary is closed" (fun conn ->
       let* a, b = two_communities conn "audit" in
-      let* () = accepts conn "subject row" (row_sql ~requester:a ~recipient:b ()) in
+      let* () =
+        accepts conn "subject row" (row_sql ~requester:a ~recipient:b ())
+      in
       let* id = find conn "row id" q_sole_id (a, b) in
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* () =
@@ -482,8 +470,12 @@ let audit_vocabulary_case =
             let* r = C.find q_insert_audit ((action, None), (id, a, b)) in
             let* _ = or_fail ("audit " ^ action) r in
             Lwt.return_unit)
-          [ "community_connection_requested"; "community_connection_accepted"
-          ; "community_connection_rejected"; "community_connection_removed" ]
+          [
+            "community_connection_requested";
+            "community_connection_accepted";
+            "community_connection_rejected";
+            "community_connection_removed";
+          ]
       in
       let* n = find conn "audit count" q_audit_count id in
       Alcotest.(check int) "four events stored" 4 n;
@@ -491,23 +483,28 @@ let audit_vocabulary_case =
         (fun action ->
           let* r = C.find q_insert_audit ((action, None), (id, a, b)) in
           reject ("audit rejects " ^ action) r)
-        [ "connection_requested"; "community_connection_created"
-        ; "Community_Connection_Accepted"; "community_connection_removed " ])
+        [
+          "connection_requested";
+          "community_connection_created";
+          "Community_Connection_Accepted";
+          "community_connection_removed ";
+        ])
 
 let audit_privacy_case =
   db_case "schema: the audit table stores no prose beyond its action"
     (fun conn ->
       let* columns = collect conn "text columns" q_text_columns () in
       Alcotest.(check (list string))
-        "the only non-numeric column is the closed action" [ "action" ]
-        columns;
+        "the only non-numeric column is the closed action" [ "action" ] columns;
       Lwt.return_unit)
 
 let audit_survives_actor_case =
   db_case "schema: audit events survive their actor's deletion" (fun conn ->
       let* a, b = two_communities conn "aactor" in
       let* uid = insert_user conn "ccns_aactor" in
-      let* () = accepts conn "subject row" (row_sql ~requester:a ~recipient:b ()) in
+      let* () =
+        accepts conn "subject row" (row_sql ~requester:a ~recipient:b ())
+      in
       let* id = find conn "row id" q_sole_id (a, b) in
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* event =
@@ -525,7 +522,9 @@ let audit_survives_actor_case =
 let audit_blocks_deletion_case =
   db_case "schema: audit history confronts a community deletion" (fun conn ->
       let* a, b = two_communities conn "block" in
-      let* () = accepts conn "subject row" (row_sql ~requester:a ~recipient:b ()) in
+      let* () =
+        accepts conn "subject row" (row_sql ~requester:a ~recipient:b ())
+      in
       let* id = find conn "row id" q_sole_id (a, b) in
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* event =
@@ -542,21 +541,34 @@ let audit_blocks_deletion_case =
       (* Without audit history the cascade is free to run. *)
       let* c = insert_community conn "ccns-block-c" in
       let* d = insert_community conn "ccns-block-d" in
-      let* () = accepts conn "unaudited row" (row_sql ~requester:c ~recipient:d ()) in
+      let* () =
+        accepts conn "unaudited row" (row_sql ~requester:c ~recipient:d ())
+      in
       let* () = exec conn "delete unaudited community" q_delete_community c in
       let* n = find conn "cascade ran" q_count_pair (c, d) in
       Alcotest.(check int) "the unaudited connection cascaded away" 0 n;
       Lwt.return_unit)
 
 let suite =
-  [ valid_shapes_case; self_connection_case; status_vocabulary_case
-  ; note_length_case; timestamp_order_case; pending_shape_case
-  ; reviewed_shape_case; removed_shape_case; nullable_actors_case
-  ; missing_community_case; one_active_pair_case; history_frees_slot_case
-  ; index_shape_case; deletion_behavior_case; audit_vocabulary_case
-  ; audit_privacy_case; audit_survives_actor_case; audit_blocks_deletion_case
+  [
+    valid_shapes_case;
+    self_connection_case;
+    status_vocabulary_case;
+    note_length_case;
+    timestamp_order_case;
+    pending_shape_case;
+    reviewed_shape_case;
+    removed_shape_case;
+    nullable_actors_case;
+    missing_community_case;
+    one_active_pair_case;
+    history_frees_slot_case;
+    index_shape_case;
+    deletion_behavior_case;
+    audit_vocabulary_case;
+    audit_privacy_case;
+    audit_survives_actor_case;
+    audit_blocks_deletion_case;
   ]
 
-let suites =
-  [ ("community_connections_schema", suite)
-  ]
+let suites = [ ("community_connections_schema", suite) ]

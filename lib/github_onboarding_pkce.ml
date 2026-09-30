@@ -9,12 +9,9 @@
 
 type verifier = string
 type challenge = string
-
-type parse_error =
-  | Invalid_format
+type parse_error = Invalid_format
 
 let verifier_bytes = 32
-
 let generate_verifier () = Dream.to_base64url (Dream.random verifier_bytes)
 
 (* The error is deliberately payload-free: a rejected verifier is secret (or

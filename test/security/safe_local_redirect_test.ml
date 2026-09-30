@@ -13,16 +13,20 @@ let request ?(host = Some "earde.com") () =
     ""
 
 let check ?default ?host label target expected =
-  Alcotest.(check string) label expected
-    (Earde.Handler_support.safe_local_redirect ?default (request ?host ()) target)
+  Alcotest.(check string)
+    label expected
+    (Earde.Handler_support.safe_local_redirect ?default (request ?host ())
+       target)
 
 let local_paths_case =
   case "local relative paths pass; query kept; fragment dropped" (fun () ->
       check "plain path" "/admin" "/admin";
       check "root" "/" "/";
-      check "query preserved" "/u/gab_target?tab=posts" "/u/gab_target?tab=posts";
+      check "query preserved" "/u/gab_target?tab=posts"
+        "/u/gab_target?tab=posts";
       check "fragment dropped" "/admin#banned" "/admin";
-      check "query kept, fragment dropped" "/u/bob?tab=posts#top" "/u/bob?tab=posts")
+      check "query kept, fragment dropped" "/u/bob?tab=posts#top"
+        "/u/bob?tab=posts")
 
 let same_origin_case =
   case "absolute same-origin URLs reduce to path+query" (fun () ->
@@ -34,7 +38,8 @@ let same_origin_case =
       check "explicit https port" "https://earde.com:443/admin" "/admin";
       check "explicit http port" "http://earde.com:80/admin" "/admin";
       check "empty path becomes root" "https://earde.com" "/";
-      check "case-insensitive host and scheme" "HTTPS://EARDE.COM/admin" "/admin";
+      check "case-insensitive host and scheme" "HTTPS://EARDE.COM/admin"
+        "/admin";
       check ~host:(Some "localhost:8080") "host with port"
         "http://localhost:8080/admin?tab=x" "/admin?tab=x")
 
@@ -79,29 +84,44 @@ let never_absolute_case =
             Earde.Handler_support.safe_local_redirect (request ()) target
           in
           Alcotest.(check bool)
-            (target ^ ": starts with single /") true
-            (String.length out > 0 && out.[0] = '/'
+            (target ^ ": starts with single /")
+            true
+            (String.length out > 0
+            && out.[0] = '/'
             && not (String.length out >= 2 && out.[1] = '/'));
-          Alcotest.(check bool) (target ^ ": no scheme") false
+          Alcotest.(check bool)
+            (target ^ ": no scheme") false
             (Html_assert.contains out "://");
-          Alcotest.(check bool) (target ^ ": no fragment") false
-            (String.contains out '#'))
-        [ "/admin"; "https://earde.com/u/x?tab=posts#f"; "//evil.example";
-          "https://evil.example/x"; "https://earde.com//evil.example";
-          "ftp://earde.com/x"; "\\\\evil.example"; "https://earde.com#f";
-          "https://earde.com"; "" ])
+          Alcotest.(check bool)
+            (target ^ ": no fragment") false (String.contains out '#'))
+        [
+          "/admin";
+          "https://earde.com/u/x?tab=posts#f";
+          "//evil.example";
+          "https://evil.example/x";
+          "https://earde.com//evil.example";
+          "ftp://earde.com/x";
+          "\\\\evil.example";
+          "https://earde.com#f";
+          "https://earde.com";
+          "";
+        ])
 
 let suite =
-  [ local_paths_case; same_origin_case; foreign_case; hostile_case;
-    never_absolute_case ]
+  [
+    local_paths_case;
+    same_origin_case;
+    foreign_case;
+    hostile_case;
+    never_absolute_case;
+  ]
 
 let suites =
-    (* Global-admin ban/unban hardening: the pure redirect-target grammar
+  (* Global-admin ban/unban hardening: the pure redirect-target grammar
        (local paths, same-origin Referer reduction, hostile fallbacks), and
        the real POST routes over a real database — rendered form contracts,
        happy paths returning to their originating surface, the full
        CSRF-rejection matrix with zero side effects, authorization and
        target-resolution order, and the Referer grammar end to end.
        The grammar suite is DB-free; the action suite is database-gated. *)
-  [ ("safe_local_redirect_grammar", suite)
-  ]
+  [ ("safe_local_redirect_grammar", suite) ]

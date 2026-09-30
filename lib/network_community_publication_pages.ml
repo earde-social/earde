@@ -19,11 +19,7 @@ type project = {
   kind : Project_identity.kind;
 }
 
-type community = {
-  name : string;
-  slug : string;
-  description : string option;
-}
+type community = { name : string; slug : string; description : string option }
 
 type form_values = {
   community_name : string;
@@ -42,7 +38,6 @@ type feedback =
   | Community_slug_unavailable
   | Draft_unavailable
   | Publication_failed
-
 
 (* Descriptive kind labels without endorsement language, identical to the
    provisioning page's vocabulary. *)
@@ -75,14 +70,17 @@ let canonical_network_slug value =
    length, or which durable row lost a race. *)
 let feedback_copy = function
   | Stale_form ->
-      Html.static "This page had been open too long, so the form could no longer be \
-       submitted. Nothing was changed. Review it and submit again."
+      Html.static
+        "This page had been open too long, so the form could no longer be \
+         submitted. Nothing was changed. Review it and submit again."
   | Invalid_form ->
-      Html.static "We couldn't read that submission. Review the form and try again."
+      Html.static
+        "We couldn't read that submission. Review the form and try again."
   | Invalid_community_name -> Html.static "Enter a community name we can use."
   | Invalid_community_slug ->
-      Html.static "Enter a community address using lowercase letters, numbers, and \
-       single hyphens."
+      Html.static
+        "Enter a community address using lowercase letters, numbers, and \
+         single hyphens."
   | Invalid_community_description ->
       Html.static "That description can't be used. Edit it and try again."
   | Invalid_publication_visibility ->
@@ -91,69 +89,64 @@ let feedback_copy = function
       Html.static "That community address is already taken. Choose another one."
   | Draft_unavailable ->
       Html.static "This community is no longer waiting to be published."
-  | Publication_failed -> Html.static "We couldn't publish the community. Try again."
+  | Publication_failed ->
+      Html.static "We couldn't publish the community. Try again."
 
 let feedback_html = function
   | None -> Html.empty
   | Some feedback ->
-      (Html.template "<div class='ncp-alert'><p>%s</p></div>"
-  [ (feedback_copy feedback) ])
+      Html.template "<div class='ncp-alert'><p>%s</p></div>"
+        [ feedback_copy feedback ]
 
 let heading_html =
-  (Html.static "<div class='create-head'>\
-   <h1 class='create-title'>Complete setup and publish</h1>\
-   <p class='create-sub ncp-intro'>Review the community identity and choose \
-   how people can discover it.</p>\
-   </div>")
+  Html.static
+    "<div class='create-head'><h1 class='create-title'>Complete setup and \
+     publish</h1><p class='create-sub ncp-intro'>Review the community identity \
+     and choose how people can discover it.</p></div>"
 
 (* The project this community is the home of, as plain identity. No link is
    emitted: no public project route exists, so a project-derived href could
    only ever be an unusable or misleading one. *)
 let project_html (project : project) =
-  (Html.template "<section class='ncp-project'>\
-     <h2 class='ncp-project-name'>%s</h2>\
-     <p class='ncp-project-meta'>%s &middot; %s</p>\
-     <p class='ncp-project-note'>Connected through GitHub.</p>\
-     </section>"
-  [ (Html.text (project.name))
-  ; (kind_copy project.kind)
-  ; (Html.text (project.namespace_login)) ])
+  Html.template
+    "<section class='ncp-project'><h2 class='ncp-project-name'>%s</h2><p \
+     class='ncp-project-meta'>%s &middot; %s</p><p \
+     class='ncp-project-note'>Connected through GitHub.</p></section>"
+    [
+      Html.text project.name;
+      kind_copy project.kind;
+      Html.text project.namespace_login;
+    ]
 
 (* What state the community is in now, and what publishing does and does not
    do. Publication is named as the explicit action it is, with exactly the
    two choices it offers, so nobody expects a fully private published
    community — and nothing here suggests a new permission appears. *)
 let explanation_html =
-  (Html.static "<section class='ncp-explain'>\
-   <h2 class='ncp-explain-title'>Where this community stands</h2>\
-   <ul class='ncp-explain-list'>\
-   <li>This community is still a private setup draft. Only people authorized \
-   for setup can reach it.</li>\
-   <li>Publishing is a separate, explicit action. Nothing is published until \
-   you submit this form.</li>\
-   <li>A network community keeps a public home. Private rooms and restricted \
-   sections can still exist inside it under either choice below.</li>\
-   <li>It cannot be published as a fully private community.</li>\
-   <li>Publishing does not change who moderates or administers anything. \
-   Project stewards gain no permission beyond the durable roles they already \
-   hold.</li>\
-   </ul>\
-   </section>")
+  Html.static
+    "<section class='ncp-explain'><h2 class='ncp-explain-title'>Where this \
+     community stands</h2><ul class='ncp-explain-list'><li>This community is \
+     still a private setup draft. Only people authorized for setup can reach \
+     it.</li><li>Publishing is a separate, explicit action. Nothing is \
+     published until you submit this form.</li><li>A network community keeps a \
+     public home. Private rooms and restricted sections can still exist inside \
+     it under either choice below.</li><li>It cannot be published as a fully \
+     private community.</li><li>Publishing does not change who moderates or \
+     administers anything. Project stewards gain no permission beyond the \
+     durable roles they already hold.</li></ul></section>"
 
 (* The two publication choices, described so the difference is unambiguous
    before the radio is clicked. *)
 let choices_html =
-  (Html.static "<section class='ncp-choices'>\
-   <h2 class='ncp-choices-title'>How people find this community</h2>\
-   <ul class='ncp-choices-list'>\
-   <li><strong>Public</strong> &mdash; reachable by anyone, listed in \
-   Earde&#39;s own discovery surfaces, and open to search-engine \
-   indexing.</li>\
-   <li><strong>Unlisted</strong> &mdash; reachable by anyone with the direct \
-   URL, but kept out of Earde&#39;s discovery surfaces and marked \
-   <code>noindex</code> for search engines.</li>\
-   </ul>\
-   </section>")
+  Html.static
+    "<section class='ncp-choices'><h2 class='ncp-choices-title'>How people \
+     find this community</h2><ul \
+     class='ncp-choices-list'><li><strong>Public</strong> &mdash; reachable by \
+     anyone, listed in Earde&#39;s own discovery surfaces, and open to \
+     search-engine indexing.</li><li><strong>Unlisted</strong> &mdash; \
+     reachable by anyone with the direct URL, but kept out of Earde&#39;s \
+     discovery surfaces and marked <code>noindex</code> for search \
+     engines.</li></ul></section>"
 
 (* Preselection is deliberately conservative. A valid explicit choice wins.
    No choice at all — the empty value the first render carries — falls back
@@ -167,15 +160,13 @@ let radio_html ~(values : form_values) =
     | "unlisted" -> if String.equal value "unlisted" then " checked" else ""
     | _ -> ""
   in
-  (Html.template "<fieldset class='ncp-visibility'>\
-     <legend class='ncp-legend'>Publish as</legend>\
-     <label class='ncp-radio'><input type='radio' \
-     name='publication_visibility' value='public'%s> Public</label>\
-     <label class='ncp-radio'><input type='radio' \
-     name='publication_visibility' value='unlisted'%s> Unlisted</label>\
-     </fieldset>"
-  [ (Html.text (checked "public"))
-  ; (Html.text (checked "unlisted")) ])
+  Html.template
+    "<fieldset class='ncp-visibility'><legend class='ncp-legend'>Publish \
+     as</legend><label class='ncp-radio'><input type='radio' \
+     name='publication_visibility' value='public'%s> Public</label><label \
+     class='ncp-radio'><input type='radio' name='publication_visibility' \
+     value='unlisted'%s> Unlisted</label></fieldset>"
+    [ Html.text (checked "public"); Html.text (checked "unlisted") ]
 
 (* The one form. No application-owned hidden field exists: the route path
    supplies the community, and the future POST handler re-derives the
@@ -189,30 +180,31 @@ let radio_html ~(values : form_values) =
    reject. *)
 let form_html ?request ~community_slug ~(values : form_values) () =
   let csrf_field =
-    match request with None -> Html.empty | Some request -> Csrf_field.tag request
+    match request with
+    | None -> Html.empty
+    | Some request -> Csrf_field.tag request
   in
-  (Html.template "<form method='POST' action='/c/%s/publish' class='create-form \
-     ncp-form'>%s\
-     <label class='ncp-field'>Community name\
-     <input type='text' name='community_name' maxlength='120' value='%s'>\
-     </label>\
-     <label class='ncp-field'>Community address\
-     <input type='text' name='community_slug' maxlength='80' value='%s'>\
-     </label>\
-     <p class='ncp-hint'>The community lives at /c/&lt;address&gt;. Use \
-     lowercase letters, numbers, and single hyphens.</p>\
-     <label class='ncp-field'>Community description\
-     <textarea name='community_description' maxlength='2000' rows='6'>%s\
-     </textarea></label>%s\
-     <div class='create-actions'><button type='submit' class='create-btn \
-     create-btn--block'>Publish community</button></div>\
-     </form>"
-  [ (Html.text (community_slug))
-  ; csrf_field
-  ; (Html.text (values.community_name))
-  ; (Html.text (values.community_slug))
-  ; (Html.text (values.community_description))
-  ; (radio_html ~values) ])
+  Html.template
+    "<form method='POST' action='/c/%s/publish' class='create-form \
+     ncp-form'>%s<label class='ncp-field'>Community name<input type='text' \
+     name='community_name' maxlength='120' value='%s'></label><label \
+     class='ncp-field'>Community address<input type='text' \
+     name='community_slug' maxlength='80' value='%s'></label><p \
+     class='ncp-hint'>The community lives at /c/&lt;address&gt;. Use lowercase \
+     letters, numbers, and single hyphens.</p><label \
+     class='ncp-field'>Community description<textarea \
+     name='community_description' maxlength='2000' \
+     rows='6'>%s</textarea></label>%s<div class='create-actions'><button \
+     type='submit' class='create-btn create-btn--block'>Publish \
+     community</button></div></form>"
+    [
+      Html.text community_slug;
+      csrf_field;
+      Html.text values.community_name;
+      Html.text values.community_slug;
+      Html.text values.community_description;
+      radio_html ~values;
+    ]
 
 (* Without a canonical draft slug there is no POST target to build; the page
    degrades to its copy alone rather than emitting an action that could not
@@ -232,7 +224,9 @@ let actions_html ?request ~(community : community) ~values () =
    fragment, so the byte-exact fragment the test suites slice is untouched.
    Markup only — no form, no field, no script, no inline style. *)
 let stepper_html =
-  let labels = List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let labels =
+    List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ]
+  in
   let active = 3 in
   let step index label =
     let dot_class, dot_text =
@@ -245,27 +239,33 @@ let stepper_html =
       if index = active then "step__label step__label--active"
       else "step__label"
     in
-    (Html.template "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
-  [ (Html.text dot_class)
-  ; (Html.text dot_text)
-  ; (Html.text label_class)
-  ; label ])
+    Html.template
+      "<li class='step'><span class='%s'>%s</span><span \
+       class='%s'>%s</span></li>"
+      [ Html.text dot_class; Html.text dot_text; Html.text label_class; label ]
   in
-  (Html.template "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
-  [ (Html.join (Html.static "<li class='step__rule' aria-hidden='true'></li>")
-       (List.mapi step labels)) ])
+  Html.template
+    "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+    [
+      Html.join
+        (Html.static "<li class='step__rule' aria-hidden='true'></li>")
+        (List.mapi step labels);
+    ]
 
 let network_community_publication_page ?user ?request ~community ~project
     ~values ~feedback () =
   let body =
-    (Html.template "<div class='create-wrap network-community-publication'><div \
+    Html.template
+      "<div class='create-wrap network-community-publication'><div \
        class='create-panel'>%s%s%s%s%s%s</div></div>"
-  [ (feedback_html feedback)
-  ; heading_html
-  ; (project_html project)
-  ; explanation_html
-  ; choices_html
-  ; (actions_html ?request ~community ~values ()) ])
+      [
+        feedback_html feedback;
+        heading_html;
+        project_html project;
+        explanation_html;
+        choices_html;
+        actions_html ?request ~community ~values ();
+      ]
   in
   (* noindex: an authorized-only setup surface — not for search indexes. *)
   Page_shell.launch_onboarding_page ?user ?request ~noindex:true

@@ -8,7 +8,10 @@
 let is_tracked_request ~path ~user_agent =
   (* Static asset filter: log only meaningful page navigations, not asset fetches. *)
   let is_static =
-    let has_prefix p = String.length path >= String.length p && String.sub path 0 (String.length p) = p in
+    let has_prefix p =
+      String.length path >= String.length p
+      && String.sub path 0 (String.length p) = p
+    in
     let has_suffix s =
       let pl = String.length path and sl = String.length s in
       pl >= sl && String.sub path (pl - sl) sl = s
@@ -36,7 +39,8 @@ let is_tracked_request ~path ~user_agent =
             in
             loop 0
         in
-        contains "bot" || contains "crawler" || contains "spider" || contains "scraper"
+        contains "bot" || contains "crawler" || contains "spider"
+        || contains "scraper"
   in
 
   let is_admin_route =
@@ -47,8 +51,9 @@ let is_tracked_request ~path ~user_agent =
        query-string variants too. *)
     let admin_prefix = "/earde-hq-dashboard" in
     let plen = String.length path and alen = String.length admin_prefix in
-    (plen >= alen && String.sub path 0 alen = admin_prefix
-     && (plen = alen || path.[alen] = '?' || path.[alen] = '/'))
+    plen >= alen
+    && String.sub path 0 alen = admin_prefix
+    && (plen = alen || path.[alen] = '?' || path.[alen] = '/')
   in
   not (is_admin_route || path = "/api/unread-notifs" || is_static || is_bot)
 
@@ -66,8 +71,10 @@ let presence_middleware inner_handler request =
       when is_tracked_request ~path:(Dream.target request)
              ~user_agent:(Dream.header request "User-Agent") ->
         Dream.sql request (fun db ->
-          let%lwt _ = User_store.touch_user_active db (int_of_string uid_str) in
-          Lwt.return_unit)
+            let%lwt _ =
+              User_store.touch_user_active db (int_of_string uid_str)
+            in
+            Lwt.return_unit)
     | _ -> Lwt.return_unit
   in
   inner_handler request
@@ -75,19 +82,19 @@ let presence_middleware inner_handler request =
 let analytics_middleware inner_handler request =
   let path = Dream.target request in
   let%lwt _ =
-    if not (is_tracked_request ~path
-              ~user_agent:(Dream.header request "User-Agent"))
+    if
+      not
+        (is_tracked_request ~path
+           ~user_agent:(Dream.header request "User-Agent"))
     then Lwt.return_unit
     else begin
       (* Sanitize referer: keep only host to avoid leaking tokens in paths/query strings. *)
       let referer =
         match Dream.header request "Referer" with
         | None -> None
-        | Some raw ->
+        | Some raw -> (
             let uri = Uri.of_string raw in
-            (match Uri.host uri with
-             | None -> None
-             | Some h -> Some h)
+            match Uri.host uri with None -> None | Some h -> Some h)
       in
       (* Daily-rotating session hash: IP + UA + date → MD5 hex. Rotating daily means
          the hash never accumulates cross-day fingerprinting risk (GDPR Art. 5(1)(e)).
@@ -98,13 +105,15 @@ let analytics_middleware inner_handler request =
       let date =
         let t = Unix.gettimeofday () in
         let tm = Unix.gmtime t in
-        Printf.sprintf "%04d-%02d-%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+        Printf.sprintf "%04d-%02d-%02d" (tm.Unix.tm_year + 1900)
+          (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
       in
       let session_hash = Digest.to_hex (Digest.string (ip ^ ua ^ date)) in
       Dream.sql request (fun db ->
-        let%lwt _ = Page_view_store.log_page_view db path referer session_hash in
-        Lwt.return_unit
-      )
+          let%lwt _ =
+            Page_view_store.log_page_view db path referer session_hash
+          in
+          Lwt.return_unit)
     end
   in
   inner_handler request

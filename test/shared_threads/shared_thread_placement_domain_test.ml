@@ -31,10 +31,7 @@ let ok label = function
   | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
 
 let pending ?note () = ok "pending fixture" (make ?note ())
-
-let all_statuses =
-  [ P.Pending; P.Accepted; P.Rejected; P.Removed; P.Withdrawn ]
-
+let all_statuses = [ P.Pending; P.Accepted; P.Rejected; P.Removed; P.Withdrawn ]
 let all_actions = [ P.Accept; P.Reject; P.Withdraw; P.Remove ]
 
 let action_str = function
@@ -78,15 +75,23 @@ let unknown_status_case =
         (fun raw ->
           match P.status_of_string raw with
           | None -> ()
-          | Some s ->
-              Alcotest.failf "decoded %S as %s" raw (status_str s))
-        [ "Pending"; "PENDING"; "active"; "cancelled"; "withdraw"
-        ; "deleted"; " pending"; "pending "; "" ])
+          | Some s -> Alcotest.failf "decoded %S as %s" raw (status_str s))
+        [
+          "Pending";
+          "PENDING";
+          "active";
+          "cancelled";
+          "withdraw";
+          "deleted";
+          " pending";
+          "pending ";
+          "";
+        ])
 
 let transition_matrix_case =
   Alcotest.test_case
-    "lifecycle: exactly four transitions are legal, all others refuse"
-    `Quick (fun () ->
+    "lifecycle: exactly four transitions are legal, all others refuse" `Quick
+    (fun () ->
       let legal = function
         | P.Pending, P.Accept -> Some P.Accepted
         | P.Pending, P.Reject -> Some P.Rejected
@@ -100,8 +105,7 @@ let transition_matrix_case =
             (fun action ->
               let value = value_of_status status in
               let label =
-                Printf.sprintf "%s + %s" (status_str status)
-                  (action_str action)
+                Printf.sprintf "%s + %s" (status_str status) (action_str action)
               in
               match (P.apply value action, legal (status, action)) with
               | Ok next, Some expected ->
@@ -142,48 +146,47 @@ let withdrawn_distinct_case =
           match P.apply withdrawn action with
           | Error P.Invalid_transition -> ()
           | Ok _ ->
-              Alcotest.failf "withdrawn + %s was allowed"
-                (action_str action)
+              Alcotest.failf "withdrawn + %s was allowed" (action_str action)
           | Error e ->
               Alcotest.failf "withdrawn + %s: %s" (action_str action)
                 (error_str e))
         all_actions)
 
 let create_errors_case =
-  Alcotest.test_case "create: id validation and the same-community rule"
-    `Quick (fun () ->
+  Alcotest.test_case "create: id validation and the same-community rule" `Quick
+    (fun () ->
       let expect label expected result =
         match result with
         | Ok _ -> Alcotest.failf "%s: unexpectedly accepted" label
         | Error e ->
-            Alcotest.(check string) label (error_str expected)
-              (error_str e)
+            Alcotest.(check string) label (error_str expected) (error_str e)
       in
       expect "zero post" P.Invalid_post_id (make ~post:0 ());
       expect "negative post" P.Invalid_post_id (make ~post:(-3) ());
       expect "zero origin" P.Invalid_community_id (make ~origin:0 ());
-      expect "zero destination" P.Invalid_community_id
-        (make ~destination:0 ());
+      expect "zero destination" P.Invalid_community_id (make ~destination:0 ());
       expect "same community" P.Same_community
         (make ~origin:9 ~destination:9 ());
       let v = pending () in
       Alcotest.(check int) "post accessor" 7 (P.post_id v);
       Alcotest.(check int) "origin accessor" 11 (P.origin_community_id v);
-      Alcotest.(check int) "destination accessor" 22
+      Alcotest.(check int)
+        "destination accessor" 22
         (P.destination_community_id v);
-      Alcotest.(check bool) "involves origin" true
+      Alcotest.(check bool)
+        "involves origin" true
         (P.involves v ~community_id:11);
-      Alcotest.(check bool) "involves destination" true
+      Alcotest.(check bool)
+        "involves destination" true
         (P.involves v ~community_id:22);
-      Alcotest.(check bool) "involves stranger" false
+      Alcotest.(check bool)
+        "involves stranger" false
         (P.involves v ~community_id:33))
 
 let note_canonicalization_case =
   Alcotest.test_case "note: canonicalization and blank collapse" `Quick
     (fun () ->
-      let note_of result =
-        P.request_note (ok "note fixture" result)
-      in
+      let note_of result = P.request_note (ok "note fixture" result) in
       Alcotest.(check (option string))
         "absent stays absent" None
         (note_of (make ()));
@@ -229,32 +232,42 @@ let note_limit_case =
 
 let tombstone_case =
   Alcotest.test_case
-    "tombstone: exactly the three deletion labels, and nothing else"
-    `Quick (fun () ->
+    "tombstone: exactly the three deletion labels, and nothing else" `Quick
+    (fun () ->
       List.iter
         (fun label ->
-          Alcotest.(check bool) label true
+          Alcotest.(check bool)
+            label true
             (P.post_content_tombstoned (Some label)))
         [ "[deleted]"; "[removed by admin]"; "[removed by moderator]" ];
       List.iter
         (fun (label, content) ->
-          Alcotest.(check bool) label false
-            (P.post_content_tombstoned content))
-        [ ("a link post", None); ("ordinary text", Some "hello")
-        ; ("prefixed", Some " [deleted]"); ("cased", Some "[Deleted]")
-        ; ("empty", Some "") ])
+          Alcotest.(check bool) label false (P.post_content_tombstoned content))
+        [
+          ("a link post", None);
+          ("ordinary text", Some "hello");
+          ("prefixed", Some " [deleted]");
+          ("cased", Some "[Deleted]");
+          ("empty", Some "");
+        ])
 
 let suite =
-  [ status_round_trip_case; unknown_status_case; transition_matrix_case
-  ; withdrawn_distinct_case; create_errors_case
-  ; note_canonicalization_case; note_limit_case; tombstone_case ]
+  [
+    status_round_trip_case;
+    unknown_status_case;
+    transition_matrix_case;
+    withdrawn_distinct_case;
+    create_errors_case;
+    note_canonicalization_case;
+    note_limit_case;
+    tombstone_case;
+  ]
 
 let suites =
-    (* Shared threads, slice 1 (storage/domain foundation): the pure
+  (* Shared threads, slice 1 (storage/domain foundation): the pure
        placement lifecycle and note canonicalization are DB-free; the
        placement and audit tables' constraints, the transactional store
        with its one-audit-event-per-mutation rule and structured
        notifications, the active-(post, destination) arbitration under
        real concurrency, and the recipient policy are database-gated. *)
-  [ ("shared_thread_placements_domain", suite)
-  ]
+  [ ("shared_thread_placements_domain", suite) ]

@@ -32,23 +32,41 @@ let shadow = "banfc_shadow"
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP SCHEMA IF EXISTS banfc_shadow CASCADE"
-    ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'banfc\\_%')"
-    ; "DELETE FROM reports WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%'))"
-    ; "DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'banfc\\_%')"
-    ; "DELETE FROM thread_source_messages WHERE post_id IN (SELECT id FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%'))"
-    ; "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM chat_messages WHERE channel_id IN (SELECT id FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%'))"
-    ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%')"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'banfc-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'banfc-%'"
-    ; "DELETE FROM users WHERE username LIKE 'banfc\\_%'"
+    [
+      "DROP SCHEMA IF EXISTS banfc_shadow CASCADE";
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'banfc\\_%')";
+      "DELETE FROM reports WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE \
+       community_id IN (SELECT id FROM communities WHERE slug LIKE 'banfc-%'))";
+      "DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'banfc\\_%')";
+      "DELETE FROM thread_source_messages WHERE post_id IN (SELECT id FROM \
+       posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'banfc-%'))";
+      "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM chat_messages WHERE channel_id IN (SELECT id FROM channels \
+       WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'banfc-%'))";
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'banfc-%')";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT \
+       'community:' || c.id::text FROM communities c WHERE c.slug LIKE \
+       'banfc-%')";
+      "DELETE FROM communities WHERE slug LIKE 'banfc-%'";
+      "DELETE FROM users WHERE username LIKE 'banfc\\_%'";
     ]
 
 let db_case name f =
@@ -78,7 +96,7 @@ let db_case name f =
 
 let q_drop_shadow =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP SCHEMA IF EXISTS banfc_shadow CASCADE"
+    "DROP SCHEMA IF EXISTS banfc_shadow CASCADE"
 
 let q_create_shadow =
   (Caqti_type.unit ->. Caqti_type.unit) "CREATE SCHEMA banfc_shadow"
@@ -87,10 +105,10 @@ let q_create_shadow =
    tables, views, materialized views, foreign tables. *)
 let q_public_relations =
   (Caqti_type.unit ->* Caqti_type.string)
-  "SELECT c.relname FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-   ORDER BY c.relname"
+    "SELECT c.relname FROM pg_class c\n\
+    \    JOIN pg_namespace n ON n.oid = c.relnamespace\n\
+    \   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')\n\
+    \   ORDER BY c.relname"
 
 let make_shadow (module C : Caqti_lwt.CONNECTION) ~omit =
   let* r = C.exec q_drop_shadow () in
@@ -111,8 +129,8 @@ let make_shadow (module C : Caqti_lwt.CONNECTION) ~omit =
       if List.mem t omit then Lwt.return_unit
       else
         let sql =
-          Printf.sprintf
-            "CREATE VIEW %s.\"%s\" AS SELECT * FROM public.\"%s\"" shadow t t
+          Printf.sprintf "CREATE VIEW %s.\"%s\" AS SELECT * FROM public.\"%s\""
+            shadow t t
         in
         let* r = C.exec ((Caqti_type.unit ->. Caqti_type.unit) sql) () in
         let* () = or_fail ("mirror " ^ t) r in
@@ -128,14 +146,19 @@ let with_shadow url =
    below reach first; omitting `community_bans` breaks
    Community_ban_store.is_banned only. *)
 let global_read_broken = [ "users" ]
-
 let local_read_broken = [ "community_bans" ]
-
 let generic = "A database error occurred. Please try again later."
 
 let db_needles =
-  [ "banfc_shadow"; "search_path"; "postgresql"; "caqti"; "relation";
-    "select"; "does not exist" ]
+  [
+    "banfc_shadow";
+    "search_path";
+    "postgresql";
+    "caqti";
+    "relation";
+    "select";
+    "does not exist";
+  ]
 
 let must label body s =
   if not (contains body s) then
@@ -158,70 +181,70 @@ let check_safe_failure label ~expect_status response body =
 
 let q_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@banfc.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@banfc.invalid', 'x', TRUE) RETURNING id"
 
 let q_community =
   (Caqti_type.string ->! Caqti_type.int)
-  (* sections_enabled FALSE: a sectioned community would make create_post
+    (* sections_enabled FALSE: a sectioned community would make create_post
      fail its section validation instead of reaching the write. *)
-  "INSERT INTO communities (slug, name, visibility, sections_enabled)
-   VALUES ($1, $1, 'public', FALSE) RETURNING id"
+    "INSERT INTO communities (slug, name, visibility, sections_enabled)\n\
+    \   VALUES ($1, $1, 'public', FALSE) RETURNING id"
 
 let q_member =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 let q_community_ban =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 (* Sets the durable flag directly: the production ban handler also revokes
    the user's sessions, which would hide the very gate under test. *)
 let q_global_ban =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE users SET is_banned = TRUE WHERE id = $1"
+    "UPDATE users SET is_banned = TRUE WHERE id = $1"
 
 let q_global_unban =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE users SET is_banned = FALSE WHERE id = $1"
+    "UPDATE users SET is_banned = FALSE WHERE id = $1"
 
 let q_post =
   (Caqti_type.(t3 string int int) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id)
-   VALUES ($1, 'banfc body', $2, $3) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id)\n\
+    \   VALUES ($1, 'banfc body', $2, $3) RETURNING id"
 
 let q_channel =
   (Caqti_type.(t2 string int) ->! Caqti_type.int)
-  "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)
-   RETURNING id"
+    "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)\n\
+    \   RETURNING id"
 
 let q_chat_message =
   (Caqti_type.(t3 string int int) ->! Caqti_type.int64)
-  "INSERT INTO chat_messages (content, channel_id, user_id)
-   VALUES ($1, $2, $3) RETURNING id"
+    "INSERT INTO chat_messages (content, channel_id, user_id)\n\
+    \   VALUES ($1, $2, $3) RETURNING id"
 
 let q_count_posts =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM posts WHERE community_id = $1"
+    "SELECT COUNT(*)::int FROM posts WHERE community_id = $1"
 
 let q_count_comments =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM comments WHERE post_id = $1"
+    "SELECT COUNT(*)::int FROM comments WHERE post_id = $1"
 
 let q_count_messages =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM chat_messages WHERE channel_id = $1"
+    "SELECT COUNT(*)::int FROM chat_messages WHERE channel_id = $1"
 
 let q_count_reports =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM reports WHERE community_id = $1"
+    "SELECT COUNT(*)::int FROM reports WHERE community_id = $1"
 
 let q_count_notifs =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1"
+    "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1"
 
 let count label (module C : Caqti_lwt.CONNECTION) q arg =
   let* n = C.find q arg in
@@ -250,18 +273,22 @@ let multipart_body ?file fields =
     | None -> ""
     | Some (field, filename, bytes) ->
         Printf.sprintf
-          "--%s\r\nContent-Disposition: form-data; name=\"%s\"; \
-           filename=\"%s\"\r\nContent-Type: image/png\r\n\r\n%s\r\n"
+          "--%s\r\n\
+           Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n\
+           Content-Type: image/png\r\n\
+           \r\n\
+           %s\r\n"
           boundary field filename bytes)
   ^ Printf.sprintf "--%s--\r\n" boundary
 
 let session uid = [ ("user_id", string_of_int uid); ("username", "banfc") ]
 
-let run_post ~url ?(multipart = false) ?file ?accept ~session:sess ~target
-    ~form handler =
+let run_post ~url ?(multipart = false) ?file ?accept ~session:sess ~target ~form
+    handler =
   let multipart = multipart || file <> None in
   let pipeline =
-    Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+    Dream.sql_pool url @@ Dream.memory_sessions
+    @@ fun req ->
     let* () =
       Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) sess
     in
@@ -271,20 +298,21 @@ let run_post ~url ?(multipart = false) ?file ?accept ~session:sess ~target
     handler req
   in
   let headers =
-    [ ( "Content-Type",
+    [
+      ( "Content-Type",
         if multipart then "multipart/form-data; boundary=" ^ boundary
-        else "application/x-www-form-urlencoded" ) ]
+        else "application/x-www-form-urlencoded" );
+    ]
     @ match accept with Some a -> [ ("Accept", a) ] | None -> []
   in
-  let* response =
-    pipeline (Dream.request ~method_:`POST ~target ~headers "")
-  in
+  let* response = pipeline (Dream.request ~method_:`POST ~target ~headers "") in
   let* body = Dream.body response in
   Lwt.return (response, body)
 
 let run_get ~url ~session:sess ~target handler =
   let pipeline =
-    Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+    Dream.sql_pool url @@ Dream.memory_sessions
+    @@ fun req ->
     let* () =
       Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) sess
     in
@@ -321,68 +349,78 @@ let create_post_case =
       let uploads_before = Security_fixture.uploads_listing () in
       Lwt.finalize
         (fun () ->
-        let* uid = C.find q_user "banfc_poster" in
-        let* uid = or_fail "user" uid in
-        let* cid = C.find q_community "banfc-post" in
-        let* cid = or_fail "community" cid in
-        let* r = C.exec q_member (uid, cid) in
-        let* () = or_fail "member" r in
-        let form =
-          [ ("title", "banfc post"); ("content", "banfc body");
-            ("community_id", string_of_int cid); ("url", "") ]
-        in
-        (* A genuine PNG in the field the handler actually reads, so the
+          let* uid = C.find q_user "banfc_poster" in
+          let* uid = or_fail "user" uid in
+          let* cid = C.find q_community "banfc-post" in
+          let* cid = or_fail "community" cid in
+          let* r = C.exec q_member (uid, cid) in
+          let* () = or_fail "member" r in
+          let form =
+            [
+              ("title", "banfc post");
+              ("content", "banfc body");
+              ("community_id", string_of_int cid);
+              ("url", "");
+            ]
+          in
+          (* A genuine PNG in the field the handler actually reads, so the
            ImageMagick conversion really would run if a gate let it. *)
-        let attempt label ~url =
-          run_post ~url ~session:(session uid) ~target:"/create-post"
-            ~file:("image", "banfc.png", Security_fixture.real_png)
-            ~form Earde.Post_handlers.create_post_handler
-          |> Lwt.map (fun (response, body) -> (label, response, body))
-        in
+          let attempt label ~url =
+            run_post ~url ~session:(session uid) ~target:"/create-post"
+              ~file:("image", "banfc.png", Security_fixture.real_png)
+              ~form Earde.Post_handlers.create_post_handler
+            |> Lwt.map (fun (response, body) -> (label, response, body))
+          in
 
-        (* A — the global-ban read fails. *)
-        let* () = make_shadow (module C) ~omit:global_read_broken in
-        let* label, response, body = attempt "global read" ~url:(with_shadow url) in
-        check_safe_failure label ~expect_status:500 response body;
-        let* n = count "posts" (module C) q_count_posts cid in
-        Alcotest.(check int) "global read: no post written" 0 n;
-        Alcotest.(check (list string))
-          "global read: static/uploads untouched" uploads_before
-          (Security_fixture.uploads_listing ());
+          (* A — the global-ban read fails. *)
+          let* () = make_shadow (module C) ~omit:global_read_broken in
+          let* label, response, body =
+            attempt "global read" ~url:(with_shadow url)
+          in
+          check_safe_failure label ~expect_status:500 response body;
+          let* n = count "posts" (module C) q_count_posts cid in
+          Alcotest.(check int) "global read: no post written" 0 n;
+          Alcotest.(check (list string))
+            "global read: static/uploads untouched" uploads_before
+            (Security_fixture.uploads_listing ());
 
-        (* B — the global read works, the community-ban read fails. *)
-        let* () = make_shadow (module C) ~omit:local_read_broken in
-        let* label, response, body = attempt "local read" ~url:(with_shadow url) in
-        check_safe_failure label ~expect_status:500 response body;
-        let* n = count "posts" (module C) q_count_posts cid in
-        Alcotest.(check int) "local read: no post written" 0 n;
-        Alcotest.(check (list string))
-          "local read: static/uploads untouched" uploads_before
-          (Security_fixture.uploads_listing ());
+          (* B — the global read works, the community-ban read fails. *)
+          let* () = make_shadow (module C) ~omit:local_read_broken in
+          let* label, response, body =
+            attempt "local read" ~url:(with_shadow url)
+          in
+          check_safe_failure label ~expect_status:500 response body;
+          let* n = count "posts" (module C) q_count_posts cid in
+          Alcotest.(check int) "local read: no post written" 0 n;
+          Alcotest.(check (list string))
+            "local read: static/uploads untouched" uploads_before
+            (Security_fixture.uploads_listing ());
 
-        (* C — the control: on an intact schema the very same submission is
+          (* C — the control: on an intact schema the very same submission is
            accepted, so the two refusals above are the ban reads failing and
            not a broken fixture. *)
-        let* _, response, _ = attempt "control" ~url in
-        Alcotest.(check int) "control: post accepted" 303
-          (Dream.status_to_int (Dream.status response));
-        let* n = count "posts" (module C) q_count_posts cid in
-        Alcotest.(check int) "control: exactly one post" 1 n;
-        (* The control really did convert and store an image, so the two
+          let* _, response, _ = attempt "control" ~url in
+          Alcotest.(check int)
+            "control: post accepted" 303
+            (Dream.status_to_int (Dream.status response));
+          let* n = count "posts" (module C) q_count_posts cid in
+          Alcotest.(check int) "control: exactly one post" 1 n;
+          (* The control really did convert and store an image, so the two
            "untouched" assertions above are about the gate refusing, not about
            an upload path that never works here. *)
-        Alcotest.(check int) "control: the image was stored"
-          (List.length uploads_before + 1)
-          (List.length (Security_fixture.uploads_listing ()));
+          Alcotest.(check int)
+            "control: the image was stored"
+            (List.length uploads_before + 1)
+            (List.length (Security_fixture.uploads_listing ()));
 
-        (* Teardown, asserted here rather than inside the finalizer, where a
+          (* Teardown, asserted here rather than inside the finalizer, where a
            failure would mask whatever exception was already unwinding. The
            finalizer repeats it for the paths that never reach this line. *)
-        restore_uploads uploads_before;
-        Alcotest.(check (list string))
-          "teardown restores static/uploads to its baseline" uploads_before
-          (Security_fixture.uploads_listing ());
-        Lwt.return_unit)
+          restore_uploads uploads_before;
+          Alcotest.(check (list string))
+            "teardown restores static/uploads to its baseline" uploads_before
+            (Security_fixture.uploads_listing ());
+          Lwt.return_unit)
         (fun () ->
           restore_uploads uploads_before;
           Lwt.return_unit))
@@ -392,8 +430,7 @@ let create_post_case =
 let create_comment_case =
   db_case
     "create comment: a failing ban read writes no comment, notification or \
-     counter"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     counter" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* author = C.find q_user "banfc_cauthor" in
       let* author = or_fail "author" author in
       let* uid = C.find q_user "banfc_commenter" in
@@ -406,14 +443,15 @@ let create_comment_case =
       let* pid = or_fail "post" pid in
       let attempt label ~url =
         run_post ~url ~session:(session uid) ~target:"/create-comment"
-          ~form:
-            [ ("content", "banfc comment"); ("post_id", string_of_int pid) ]
+          ~form:[ ("content", "banfc comment"); ("post_id", string_of_int pid) ]
           Earde.Comment_handlers.create_comment_handler
         |> Lwt.map (fun (response, body) -> (label, response, body))
       in
 
       let* () = make_shadow (module C) ~omit:global_read_broken in
-      let* label, response, body = attempt "global read" ~url:(with_shadow url) in
+      let* label, response, body =
+        attempt "global read" ~url:(with_shadow url)
+      in
       check_safe_failure label ~expect_status:500 response body;
       let* n = count "comments" (module C) q_count_comments pid in
       Alcotest.(check int) "global read: no comment" 0 n;
@@ -421,7 +459,9 @@ let create_comment_case =
       Alcotest.(check int) "global read: no reply notification" 0 n;
 
       let* () = make_shadow (module C) ~omit:local_read_broken in
-      let* label, response, body = attempt "local read" ~url:(with_shadow url) in
+      let* label, response, body =
+        attempt "local read" ~url:(with_shadow url)
+      in
       check_safe_failure label ~expect_status:500 response body;
       let* n = count "comments" (module C) q_count_comments pid in
       Alcotest.(check int) "local read: no comment" 0 n;
@@ -429,7 +469,8 @@ let create_comment_case =
       Alcotest.(check int) "local read: no reply notification" 0 n;
 
       let* _, response, _ = attempt "control" ~url in
-      Alcotest.(check int) "control: comment accepted" 303
+      Alcotest.(check int)
+        "control: comment accepted" 303
         (Dream.status_to_int (Dream.status response));
       let* n = count "comments" (module C) q_count_comments pid in
       Alcotest.(check int) "control: exactly one comment" 1 n;
@@ -439,8 +480,7 @@ let create_comment_case =
 
 let send_message_case =
   db_case
-    "chat send: a failing ban read persists no message, in either response \
-     mode"
+    "chat send: a failing ban read persists no message, in either response mode"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = C.find q_user "banfc_chatter" in
       let* uid = or_fail "user" uid in
@@ -453,9 +493,11 @@ let send_message_case =
       let attempt ?accept ~url () =
         run_post ~url ?accept ~session:(session uid) ~target:"/send-message"
           ~form:
-            [ ("community_slug", "banfc-chat");
+            [
+              ("community_slug", "banfc-chat");
               ("channel_slug", "banfc-general");
-              ("content", "banfc hello") ]
+              ("content", "banfc hello");
+            ]
           Earde.Chat_handlers.send_message_handler
       in
       let no_message label =
@@ -470,7 +512,8 @@ let send_message_case =
       let* response, body =
         attempt ~accept:"application/json" ~url:(with_shadow url) ()
       in
-      Alcotest.(check int) "json global read: 500" 500
+      Alcotest.(check int)
+        "json global read: 500" 500
         (Dream.status_to_int (Dream.status response));
       must "json global read" body "Something went wrong. Please try again.";
       List.iter (must_not "json global read" body) db_needles;
@@ -480,7 +523,8 @@ let send_message_case =
       let* response, body =
         attempt ~accept:"application/json" ~url:(with_shadow url) ()
       in
-      Alcotest.(check int) "json local read: 500" 500
+      Alcotest.(check int)
+        "json local read: 500" 500
         (Dream.status_to_int (Dream.status response));
       must "json local read" body "Something went wrong. Please try again.";
       List.iter (must_not "json local read" body) db_needles;
@@ -488,14 +532,16 @@ let send_message_case =
 
       (* The no-JS form path keeps its own generic HTML contract. *)
       let* response, body = attempt ~url:(with_shadow url) () in
-      Alcotest.(check bool) "html local read: not a success redirect" false
+      Alcotest.(check bool)
+        "html local read: not a success redirect" false
         (Dream.status_to_int (Dream.status response) = 303);
       must "html local read" body generic;
       List.iter (must_not "html local read" body) db_needles;
       let* () = no_message "html local read" in
 
       let* response, _ = attempt ~url () in
-      Alcotest.(check int) "control: message accepted" 303
+      Alcotest.(check int)
+        "control: message accepted" 303
         (Dream.status_to_int (Dream.status response));
       let* n = count "messages" (module C) q_count_messages chid in
       Alcotest.(check int) "control: exactly one message" 1 n;
@@ -505,12 +551,14 @@ let send_message_case =
 
 let report_router =
   Dream.router
-    [ Dream.get "/c/:slug/report" Earde.Moderation_handlers.report_form_handler;
-      Dream.post "/c/:slug/reports" Earde.Moderation_handlers.create_report_handler ]
+    [
+      Dream.get "/c/:slug/report" Earde.Moderation_handlers.report_form_handler;
+      Dream.post "/c/:slug/reports"
+        Earde.Moderation_handlers.create_report_handler;
+    ]
 
 let report_case =
-  db_case
-    "report: a failing ban read renders no form and inserts no report"
+  db_case "report: a failing ban read renders no form and inserts no report"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* author = C.find q_user "banfc_rauthor" in
       let* author = or_fail "author" author in
@@ -522,15 +570,18 @@ let report_case =
       let* pid = or_fail "post" pid in
       let get_form ~url =
         run_get ~url ~session:(session uid)
-          ~target:
-            ("/c/banfc-report/report?type=post&id=" ^ string_of_int pid)
+          ~target:("/c/banfc-report/report?type=post&id=" ^ string_of_int pid)
           report_router
       in
       let post_report ~url =
         run_post ~url ~session:(session uid) ~target:"/c/banfc-report/reports"
           ~form:
-            [ ("target_type", "post"); ("target_id", string_of_int pid);
-              ("reason", "spam"); ("details", "banfc details") ]
+            [
+              ("target_type", "post");
+              ("target_id", string_of_int pid);
+              ("reason", "spam");
+              ("details", "banfc details");
+            ]
           report_router
       in
 
@@ -552,7 +603,8 @@ let report_case =
 
       (* Control: the same reporter, form and target on an intact schema. *)
       let* response, body = get_form ~url in
-      Alcotest.(check int) "control: form renders" 200
+      Alcotest.(check int)
+        "control: form renders" 200
         (Dream.status_to_int (Dream.status response));
       must "control form" body "Report";
       let* _, body = post_report ~url in
@@ -565,10 +617,12 @@ let report_case =
 
 let start_thread_router =
   Dream.router
-    [ Dream.get "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
+    [
+      Dream.get "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
         Earde.Start_thread_handlers.start_thread_form_handler;
       Dream.post "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
-        Earde.Start_thread_handlers.start_thread_create_handler ]
+        Earde.Start_thread_handlers.start_thread_create_handler;
+    ]
 
 let start_thread_case =
   db_case
@@ -585,8 +639,8 @@ let start_thread_case =
       let* mid = C.find q_chat_message ("banfc seed", chid, uid) in
       let* mid = or_fail "seed message" mid in
       let target =
-        Printf.sprintf "/c/banfc-start/ch/banfc-start-ch/messages/%Ld/start-thread"
-          mid
+        Printf.sprintf
+          "/c/banfc-start/ch/banfc-start-ch/messages/%Ld/start-thread" mid
       in
 
       let* () = make_shadow (module C) ~omit:global_read_broken in
@@ -608,15 +662,15 @@ let start_thread_case =
       let* response, _ =
         run_get ~url ~session:(session uid) ~target start_thread_router
       in
-      Alcotest.(check int) "control: form renders" 200
+      Alcotest.(check int)
+        "control: form renders" 200
         (Dream.status_to_int (Dream.status response));
       Lwt.return_unit)
 
 (* === real bans are unchanged === *)
 
 let real_bans_case =
-  db_case
-    "actual bans keep their existing refusals on post, comment and chat"
+  db_case "actual bans keep their existing refusals on post, comment and chat"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = C.find q_user "banfc_banned" in
       let* uid = or_fail "user" uid in
@@ -635,22 +689,30 @@ let real_bans_case =
         run_post ~url ~multipart:true ~session:(session uid)
           ~target:"/create-post"
           ~form:
-            [ ("title", "banfc banned post"); ("content", "banfc body");
-              ("community_id", string_of_int cid); ("url", "") ]
+            [
+              ("title", "banfc banned post");
+              ("content", "banfc body");
+              ("community_id", string_of_int cid);
+              ("url", "");
+            ]
           Earde.Post_handlers.create_post_handler
       in
       let comment_attempt () =
         run_post ~url ~session:(session uid) ~target:"/create-comment"
           ~form:
-            [ ("content", "banfc banned comment");
-              ("post_id", string_of_int pid) ]
+            [
+              ("content", "banfc banned comment"); ("post_id", string_of_int pid);
+            ]
           Earde.Comment_handlers.create_comment_handler
       in
       let chat_attempt () =
         run_post ~url ~session:(session uid) ~target:"/send-message"
           ~form:
-            [ ("community_slug", "banfc-bans");
-              ("channel_slug", "banfc-bans-ch"); ("content", "banfc chat") ]
+            [
+              ("community_slug", "banfc-bans");
+              ("channel_slug", "banfc-bans-ch");
+              ("content", "banfc chat");
+            ]
           Earde.Chat_handlers.send_message_handler
       in
       let refused label (response, body) needle =
@@ -667,9 +729,7 @@ let real_bans_case =
       let* out = post_attempt () in
       let* () = refused "post/community ban" out "banned from posting" in
       let* out = comment_attempt () in
-      let* () =
-        refused "comment/community ban" out "banned from commenting"
-      in
+      let* () = refused "comment/community ban" out "banned from commenting" in
       let* out = chat_attempt () in
       let* () = refused "chat/community ban" out "banned from this community" in
 
@@ -693,11 +753,16 @@ let real_bans_case =
       or_fail "global unban" r)
 
 let ban_fail_closed_suite =
-  [ create_post_case; create_comment_case; send_message_case; report_case;
-    start_thread_case; real_bans_case ]
+  [
+    create_post_case;
+    create_comment_case;
+    send_message_case;
+    report_case;
+    start_thread_case;
+    real_bans_case;
+  ]
 
 let suites =
-    (* Fail-closed ban checks: a ban lookup that cannot be answered from
+  (* Fail-closed ban checks: a ban lookup that cannot be answered from
        storage must not authorize the mutation it guards. *)
-  [ ("security_ban_check_fail_closed", ban_fail_closed_suite)
-  ]
+  [ ("security_ban_check_fail_closed", ban_fail_closed_suite) ]

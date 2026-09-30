@@ -3,9 +3,7 @@ let safe_local_redirect ?(default = "/") request target =
     String.exists (fun c -> c < ' ' || c = '\x7f' || c = '\\') s
   in
   let drop_fragment s =
-    match String.index_opt s '#' with
-    | Some i -> String.sub s 0 i
-    | None -> s
+    match String.index_opt s '#' with Some i -> String.sub s 0 i | None -> s
   in
   let local_path s =
     if String.length s >= 2 && String.sub s 0 2 = "//" then None
@@ -15,8 +13,8 @@ let safe_local_redirect ?(default = "/") request target =
   let same_origin_path s =
     let uri = Uri.of_string s in
     match (Uri.scheme uri, Uri.host uri, Dream.header request "Host") with
-    | Some scheme, Some url_host, Some host_header
-      when Uri.userinfo uri = None -> (
+    | Some scheme, Some url_host, Some host_header when Uri.userinfo uri = None
+      ->
         let scheme = String.lowercase_ascii scheme in
         if not (String.equal scheme "http" || String.equal scheme "https") then
           None
@@ -58,7 +56,7 @@ let safe_local_redirect ?(default = "/") request target =
             (* A same-origin URL can still carry a protocol-relative path
                (https://host//evil) — re-check through the local-path rules. *)
             local_path with_query
-          else None)
+          else None
     | _ -> None
   in
   if has_forbidden_byte target then default
@@ -90,16 +88,22 @@ let extract_mentions text =
     if text.[!i] = '@' then begin
       let start = !i + 1 in
       let j = ref start in
-      while !j < len && (let c = text.[!j] in
-        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-        (c >= '0' && c <= '9') || c = '_') do
+      while
+        !j < len
+        &&
+        let c = text.[!j] in
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || c = '_'
+      do
         incr j
       done;
       if !j > start then
         mentions := String.sub text start (!j - start) :: !mentions;
       i := !j
-    end else
-      incr i
+    end
+    else incr i
   done;
   List.sort_uniq String.compare !mentions
 
@@ -107,16 +111,18 @@ let extract_mentions text =
 
 let get_current_user_votes db request =
   match Dream.session_field request "user_id" with
-  | Some uid_str ->
-      (match%lwt User_store.get_user_post_votes db (int_of_string uid_str) with
+  | Some uid_str -> (
+      match%lwt User_store.get_user_post_votes db (int_of_string uid_str) with
       | Ok v -> Lwt.return v
       | Error _ -> Lwt.return [])
   | None -> Lwt.return []
 
 let get_current_user_comment_votes db request =
   match Dream.session_field request "user_id" with
-  | Some uid_str ->
-      (match%lwt User_store.get_user_comment_votes db (int_of_string uid_str) with
+  | Some uid_str -> (
+      match%lwt
+        User_store.get_user_comment_votes db (int_of_string uid_str)
+      with
       | Ok v -> Lwt.return v
       | Error _ -> Lwt.return [])
   | None -> Lwt.return []

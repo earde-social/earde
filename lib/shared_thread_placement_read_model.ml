@@ -13,7 +13,6 @@
    connections search uses. See the .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Stp = Shared_thread_placements
 module Cc = Community_connections
 
@@ -123,29 +122,21 @@ let control_safe value =
 let authorize_share_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int int) bool)
-   ->? Caqti_type.(
-         t2 (t2 (t2 int string) (t2 (option string) int)) (t3 string string bool)))
-  "SELECT p.id, p.title, p.content, c.id, c.slug, c.name, \
-          (EXISTS (SELECT 1 FROM community_moderators tm \
-                   WHERE tm.community_id = c.id AND tm.user_id = $2 \
-                     AND tm.role = 'top_mod') \
-           OR ($3 AND EXISTS (SELECT 1 FROM users ua \
-                              WHERE ua.id = $2 AND ua.is_admin))) \
-   FROM posts p \
-   JOIN communities c ON c.id = p.community_id \
-   WHERE p.id = $1 \
-     AND ((p.user_id = $2 \
-           AND EXISTS (SELECT 1 FROM community_members cm \
-                       WHERE cm.user_id = $2 AND cm.community_id = c.id) \
-           AND NOT EXISTS (SELECT 1 FROM community_bans cb \
-                           WHERE cb.user_id = $2 AND cb.community_id = c.id) \
-           AND NOT EXISTS (SELECT 1 FROM users ub \
-                           WHERE ub.id = $2 AND ub.is_banned)) \
-          OR EXISTS (SELECT 1 FROM community_moderators tm2 \
-                     WHERE tm2.community_id = c.id AND tm2.user_id = $2 \
-                       AND tm2.role = 'top_mod') \
-          OR ($3 AND EXISTS (SELECT 1 FROM users ua2 \
-                             WHERE ua2.id = $2 AND ua2.is_admin)))"
+  ->? Caqti_type.(
+        t2 (t2 (t2 int string) (t2 (option string) int)) (t3 string string bool))
+  )
+    "SELECT p.id, p.title, p.content, c.id, c.slug, c.name, (EXISTS (SELECT 1 \
+     FROM community_moderators tm WHERE tm.community_id = c.id AND tm.user_id \
+     = $2 AND tm.role = 'top_mod') OR ($3 AND EXISTS (SELECT 1 FROM users ua \
+     WHERE ua.id = $2 AND ua.is_admin))) FROM posts p JOIN communities c ON \
+     c.id = p.community_id WHERE p.id = $1 AND ((p.user_id = $2 AND EXISTS \
+     (SELECT 1 FROM community_members cm WHERE cm.user_id = $2 AND \
+     cm.community_id = c.id) AND NOT EXISTS (SELECT 1 FROM community_bans cb \
+     WHERE cb.user_id = $2 AND cb.community_id = c.id) AND NOT EXISTS (SELECT \
+     1 FROM users ub WHERE ub.id = $2 AND ub.is_banned)) OR EXISTS (SELECT 1 \
+     FROM community_moderators tm2 WHERE tm2.community_id = c.id AND \
+     tm2.user_id = $2 AND tm2.role = 'top_mod') OR ($3 AND EXISTS (SELECT 1 \
+     FROM users ua2 WHERE ua2.id = $2 AND ua2.is_admin)))"
 
 (* Connectable destinations, one SQL body for both shapes. The eligibility
    predicate is spelled in SQL so the LIMIT applies after exclusion — an
@@ -159,22 +150,13 @@ let authorize_share_query =
 let candidate_sql ~exclusion ~limit_param =
   Printf.sprintf
     "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
-            c.discoverable \
-     FROM communities c \
-     WHERE c.id <> $1 \
-       AND c.visibility = 'public' \
-       AND c.onboarding_state = 'published' \
-       AND c.discoverable \
-       AND EXISTS ( \
-             SELECT 1 FROM community_connections cc \
-             WHERE cc.status = 'accepted' \
-               AND LEAST(cc.requester_community_id, \
-                         cc.recipient_community_id) = LEAST(c.id, $1) \
-               AND GREATEST(cc.requester_community_id, \
-                            cc.recipient_community_id) = GREATEST(c.id, $1)) \
-       %s \
-     ORDER BY LOWER(c.name) ASC, c.id ASC \
-     LIMIT %s"
+     c.discoverable FROM communities c WHERE c.id <> $1 AND c.visibility = \
+     'public' AND c.onboarding_state = 'published' AND c.discoverable AND \
+     EXISTS ( SELECT 1 FROM community_connections cc WHERE cc.status = \
+     'accepted' AND LEAST(cc.requester_community_id, \
+     cc.recipient_community_id) = LEAST(c.id, $1) AND \
+     GREATEST(cc.requester_community_id, cc.recipient_community_id) = \
+     GREATEST(c.id, $1)) %s ORDER BY LOWER(c.name) ASC, c.id ASC LIMIT %s"
     exclusion limit_param
 
 let candidate_row_type =
@@ -185,10 +167,9 @@ let candidates_query =
   (Caqti_type.(t3 int int int) ->* candidate_row_type)
     (candidate_sql
        ~exclusion:
-         "AND NOT EXISTS ( \
-            SELECT 1 FROM shared_thread_placements sp \
-            WHERE sp.post_id = $2 AND sp.destination_community_id = c.id \
-              AND sp.status IN ('pending', 'accepted'))"
+         "AND NOT EXISTS ( SELECT 1 FROM shared_thread_placements sp WHERE \
+          sp.post_id = $2 AND sp.destination_community_id = c.id AND sp.status \
+          IN ('pending', 'accepted'))"
        ~limit_param:"$3")
 
 (* The composer shape: the post does not exist yet, so there is no active
@@ -205,17 +186,14 @@ let connected_destinations_query =
 let placements_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int)
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int64 string) (t2 (option int) (option string)))
-           (t3 int string string)))
-  "SELECT sp.id, sp.status, sp.requested_by_user_id, sp.request_note, \
-          d.id, d.slug, d.name \
-   FROM shared_thread_placements sp \
-   JOIN communities d ON d.id = sp.destination_community_id \
-   WHERE sp.post_id = $1 AND sp.status IN ('pending', 'accepted') \
-   ORDER BY sp.created_at ASC, sp.id ASC \
-   LIMIT $2"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int64 string) (t2 (option int) (option string)))
+          (t3 int string string)))
+    "SELECT sp.id, sp.status, sp.requested_by_user_id, sp.request_note, d.id, \
+     d.slug, d.name FROM shared_thread_placements sp JOIN communities d ON \
+     d.id = sp.destination_community_id WHERE sp.post_id = $1 AND sp.status IN \
+     ('pending', 'accepted') ORDER BY sp.created_at ASC, sp.id ASC LIMIT $2"
 
 (* === decoding === *)
 
@@ -282,12 +260,12 @@ let authorize (module C : Caqti_lwt.CONNECTION) ~user_id ~session_global_admin
     | Ok None -> Lwt.return (Ok None)
     | Ok
         (Some
-          (((stored_post_id, title), (content, community_id)), (slug, name, manager)))
-      ->
+           ( ((stored_post_id, title), (content, community_id)),
+             (slug, name, manager) )) ->
         if
           not
             (stored_post_id = post_id && community_id > 0
-            && addressable_slug slug && nonblank name && control_safe name)
+           && addressable_slug slug && nonblank name && control_safe name)
         then Lwt.return (Error Inconsistent_data)
         else if Stp.post_content_tombstoned content then
           (* A tombstoned thread is not shareable; it collapses with
@@ -298,7 +276,7 @@ let authorize (module C : Caqti_lwt.CONNECTION) ~user_id ~session_global_admin
 let resolve_destination_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.int)
-  "SELECT c.id FROM communities c WHERE c.slug = $1"
+    "SELECT c.id FROM communities c WHERE c.slug = $1"
 
 let resolve_destination (module C : Caqti_lwt.CONNECTION) ~slug =
   if not (addressable_slug slug) then Lwt.return (Ok None)
@@ -339,13 +317,13 @@ let load_share_view (module C : Caqti_lwt.CONNECTION) ~user_id
                     (destination_id, destination_slug, destination_name) ) =
                 match Stp.status_of_string status_raw with
                 | Some ((Stp.Pending | Stp.Accepted) as status)
-                  when Int64.compare id 0L > 0 && destination_id > 0
+                  when Int64.compare id 0L > 0
+                       && destination_id > 0
                        && destination_id <> origin_id
                        && addressable_slug destination_slug
                        && nonblank destination_name
                        && control_safe destination_name
-                       && canonical_note ~post_id
-                            ~origin_community_id:origin_id
+                       && canonical_note ~post_id ~origin_community_id:origin_id
                             ~destination_community_id:destination_id note ->
                     let pending = status = Stp.Pending in
                     let requested_by_viewer = requested_by = Some user_id in

@@ -5,7 +5,6 @@
    authorization. See the .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Cc = Community_connections
 module Audit = Community_connection_audit
 
@@ -45,10 +44,9 @@ type error =
 (* The twelve durable columns, in one order every query below reuses.
    Timestamps cross as text, as everywhere else in the read layer. *)
 let connection_columns =
-  "id, requester_community_id, recipient_community_id, status, \
-   request_note, requested_by_user_id, reviewed_by_user_id, \
-   removed_by_user_id, created_at::text, updated_at::text, \
-   reviewed_at::text, removed_at::text"
+  "id, requester_community_id, recipient_community_id, status, request_note, \
+   requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+   created_at::text, updated_at::text, reviewed_at::text, removed_at::text"
 
 let connection_row =
   Caqti_type.(
@@ -59,7 +57,6 @@ let connection_row =
          (t2 (t2 string string) (t2 (option string) (option string)))))
 
 let positive id = Int64.compare id 0L > 0
-
 let optional_positive = function None -> true | Some id -> id > 0
 
 (* The per-status timestamp and actor shape, mirroring the table's own
@@ -99,8 +96,7 @@ let decode_connection
         && optional_positive removed_by
         && String.length created_at > 0
         && String.length updated_at > 0
-        && shape_valid ~status ~reviewed_by ~removed_by ~reviewed_at
-             ~removed_at
+        && shape_valid ~status ~reviewed_by ~removed_by ~reviewed_at ~removed_at
       then
         Some
           {
@@ -135,57 +131,51 @@ let decode_all rows =
 let q_by_id =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->* connection_row)
-  ("SELECT " ^ connection_columns
- ^ " FROM community_connections WHERE id = $1")
+    ("SELECT " ^ connection_columns
+   ^ " FROM community_connections WHERE id = $1")
 
 (* The unordered pair, normalized exactly as the partial unique index
    normalizes it, so this read and that index always agree on identity. *)
 let q_active_for_pair =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->* connection_row)
-  ("SELECT " ^ connection_columns
- ^ " FROM community_connections \
-    WHERE LEAST(requester_community_id, recipient_community_id) = $1 \
-      AND GREATEST(requester_community_id, recipient_community_id) = $2 \
-      AND status IN ('pending', 'accepted')")
+    ("SELECT " ^ connection_columns
+   ^ " FROM community_connections WHERE LEAST(requester_community_id, \
+      recipient_community_id) = $1 AND GREATEST(requester_community_id, \
+      recipient_community_id) = $2 AND status IN ('pending', 'accepted')")
 
 (* Symmetric by construction: one predicate over both per-community
    indexes, so an accepted connection appears for either side. *)
 let q_accepted_for_community =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* connection_row)
-  ("SELECT " ^ connection_columns
- ^ " FROM community_connections \
-    WHERE (requester_community_id = $1 OR recipient_community_id = $1) \
-      AND status = 'accepted' \
-    ORDER BY created_at DESC, id DESC")
+    ("SELECT " ^ connection_columns
+   ^ " FROM community_connections WHERE (requester_community_id = $1 OR \
+      recipient_community_id = $1) AND status = 'accepted' ORDER BY created_at \
+      DESC, id DESC")
 
 let q_incoming_pending =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* connection_row)
-  ("SELECT " ^ connection_columns
- ^ " FROM community_connections \
-    WHERE recipient_community_id = $1 AND status = 'pending' \
-    ORDER BY created_at, id")
+    ("SELECT " ^ connection_columns
+   ^ " FROM community_connections WHERE recipient_community_id = $1 AND status \
+      = 'pending' ORDER BY created_at, id")
 
 let q_outgoing_pending =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* connection_row)
-  ("SELECT " ^ connection_columns
- ^ " FROM community_connections \
-    WHERE requester_community_id = $1 AND status = 'pending' \
-    ORDER BY created_at, id")
+    ("SELECT " ^ connection_columns
+   ^ " FROM community_connections WHERE requester_community_id = $1 AND status \
+      = 'pending' ORDER BY created_at, id")
 
 let q_audit_for_connection =
   let open Caqti_request.Infix in
   (Caqti_type.int64
-   ->* Caqti_type.(
-         t2 (t2 (t2 int64 string) (option int)) (t3 int64 int (t2 int string))))
-  "SELECT id, action, actor_user_id, connection_id, \
-          requester_community_id, recipient_community_id, created_at::text \
-   FROM community_connection_audit_events \
-   WHERE connection_id = $1 \
-   ORDER BY id"
+  ->* Caqti_type.(
+        t2 (t2 (t2 int64 string) (option int)) (t3 int64 int (t2 int string))))
+    "SELECT id, action, actor_user_id, connection_id, requester_community_id, \
+     recipient_community_id, created_at::text FROM \
+     community_connection_audit_events WHERE connection_id = $1 ORDER BY id"
 
 let decode_event
     ( ((event_id, action_raw), actor),
@@ -194,10 +184,8 @@ let decode_event
   | None -> None
   | Some action ->
       if
-        positive event_id && positive connection_id
-        && requester > 0 && recipient > 0
-        && requester <> recipient
-        && optional_positive actor
+        positive event_id && positive connection_id && requester > 0
+        && recipient > 0 && requester <> recipient && optional_positive actor
         && String.length created_at > 0
       then
         Some

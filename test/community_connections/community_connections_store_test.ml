@@ -6,27 +6,17 @@
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Cc = Earde.Community_connections
-
 module Store = Earde.Community_connections_store
-
 module Read = Earde.Community_connections_read_model
-
 module Audit = Earde.Community_connection_audit
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let collect = Db_fixture.collect
-
 let insert_community = Community_fixture.insert_community
-
 let status_str = Cc.string_of_status
 
 let read_error_str : Read.error -> string = function
@@ -42,22 +32,21 @@ let action_str : Audit.action -> string = Audit.string_of_action
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP TRIGGER IF EXISTS ccon_fail_audit \
-       ON community_connection_audit_events"
-    ; "DROP TRIGGER IF EXISTS ccon_fail_business ON community_connections"
-    ; "DROP FUNCTION IF EXISTS ccon_fail_fn()"
-    ; "DELETE FROM community_connection_audit_events \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccon-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccon-%')"
-    ; "DELETE FROM community_connections \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccon-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccon-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'ccon-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ccon_%'"
+    [
+      "DROP TRIGGER IF EXISTS ccon_fail_audit ON \
+       community_connection_audit_events";
+      "DROP TRIGGER IF EXISTS ccon_fail_business ON community_connections";
+      "DROP FUNCTION IF EXISTS ccon_fail_fn()";
+      "DELETE FROM community_connection_audit_events WHERE \
+       requester_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccon-%') OR recipient_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'ccon-%')";
+      "DELETE FROM community_connections WHERE requester_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'ccon-%') OR \
+       recipient_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccon-%')";
+      "DELETE FROM communities WHERE slug LIKE 'ccon-%'";
+      "DELETE FROM users WHERE username LIKE 'ccon_%'";
     ]
 
 let db_case name f =
@@ -80,70 +69,62 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* === observation === *)
 
 let q_row =
   (Caqti_type.int64
-   ->! Caqti_type.(
-         t2
-           (t2 string (option string))
-           (t3 (option int) (option int) (option int))))
-  "SELECT status, request_note, requested_by_user_id, \
-          reviewed_by_user_id, removed_by_user_id \
-   FROM community_connections WHERE id = $1"
+  ->! Caqti_type.(
+        t2
+          (t2 string (option string))
+          (t3 (option int) (option int) (option int))))
+    "SELECT status, request_note, requested_by_user_id, reviewed_by_user_id, \
+     removed_by_user_id FROM community_connections WHERE id = $1"
 
 let q_stamps =
   (Caqti_type.int64 ->! Caqti_type.(t3 bool bool bool))
-  "SELECT reviewed_at IS NOT NULL, removed_at IS NOT NULL, \
-          updated_at >= created_at \
-   FROM community_connections WHERE id = $1"
+    "SELECT reviewed_at IS NOT NULL, removed_at IS NOT NULL, updated_at >= \
+     created_at FROM community_connections WHERE id = $1"
 
 let q_count_pair =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connections \
-   WHERE LEAST(requester_community_id, recipient_community_id) \
-         = LEAST($1, $2) \
-     AND GREATEST(requester_community_id, recipient_community_id) \
-         = GREATEST($1, $2)"
+    "SELECT COUNT(*) FROM community_connections WHERE \
+     LEAST(requester_community_id, recipient_community_id) = LEAST($1, $2) AND \
+     GREATEST(requester_community_id, recipient_community_id) = GREATEST($1, \
+     $2)"
 
 let q_count_active_pair =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connections \
-   WHERE LEAST(requester_community_id, recipient_community_id) \
-         = LEAST($1, $2) \
-     AND GREATEST(requester_community_id, recipient_community_id) \
-         = GREATEST($1, $2) \
-     AND status IN ('pending', 'accepted')"
+    "SELECT COUNT(*) FROM community_connections WHERE \
+     LEAST(requester_community_id, recipient_community_id) = LEAST($1, $2) AND \
+     GREATEST(requester_community_id, recipient_community_id) = GREATEST($1, \
+     $2) AND status IN ('pending', 'accepted')"
 
 (* One tuple per event, in append (id) order. *)
 let q_events =
-  (Caqti_type.int64
-   ->* Caqti_type.(t2 (t2 string (option int)) (t2 int int)))
-  "SELECT action, actor_user_id, requester_community_id, \
-          recipient_community_id \
-   FROM community_connection_audit_events \
-   WHERE connection_id = $1 ORDER BY id"
+  (Caqti_type.int64 ->* Caqti_type.(t2 (t2 string (option int)) (t2 int int)))
+    "SELECT action, actor_user_id, requester_community_id, \
+     recipient_community_id FROM community_connection_audit_events WHERE \
+     connection_id = $1 ORDER BY id"
 
 (* Everything ever recorded about one community, however the connection
    row itself ended up — the count a rolled-back mutation must not move. *)
 let q_events_for_community =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connection_audit_events \
-   WHERE requester_community_id = $1 OR recipient_community_id = $1"
+    "SELECT COUNT(*) FROM community_connection_audit_events WHERE \
+     requester_community_id = $1 OR recipient_community_id = $1"
 
 let q_delete_user =
   (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
 
 let q_absent_community_id =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
 
 let q_absent_connection_id =
   (Caqti_type.unit ->! Caqti_type.int64)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM community_connections"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM community_connections"
 
 let event_t = Alcotest.(pair (pair string (option int)) (pair int int))
 
@@ -157,20 +138,20 @@ let check_event_count label conn ~community expected =
   Alcotest.(check int) (label ^ ": community event count") expected n;
   Lwt.return_unit
 
-let check_row label conn id ~status ~note ~requested_by ~reviewed_by
-    ~removed_by =
-  let* (stored_status, stored_note),
-       (stored_requested, stored_reviewed, stored_removed) =
+let check_row label conn id ~status ~note ~requested_by ~reviewed_by ~removed_by
+    =
+  let* ( (stored_status, stored_note),
+         (stored_requested, stored_reviewed, stored_removed) ) =
     find conn (label ^ ": row") q_row id
   in
   Alcotest.(check string) (label ^ ": status") status stored_status;
   Alcotest.(check (option string)) (label ^ ": note") note stored_note;
-  Alcotest.(check (option int)) (label ^ ": requester actor") requested_by
-    stored_requested;
-  Alcotest.(check (option int)) (label ^ ": reviewer") reviewed_by
-    stored_reviewed;
-  Alcotest.(check (option int)) (label ^ ": remover") removed_by
-    stored_removed;
+  Alcotest.(check (option int))
+    (label ^ ": requester actor")
+    requested_by stored_requested;
+  Alcotest.(check (option int))
+    (label ^ ": reviewer") reviewed_by stored_reviewed;
+  Alcotest.(check (option int)) (label ^ ": remover") removed_by stored_removed;
   Lwt.return_unit
 
 (* === call helpers === *)
@@ -193,13 +174,17 @@ let request_ok label conn ~actor ?note ~requester ~recipient () =
   | Ok created -> Lwt.return (Store.created_connection_id created)
   | Error e -> Alcotest.failf "%s: %s" label (Community_fixture.error_str e)
 
-let request_expect label expected conn ~actor ?note ~requester ~recipient ()
-    =
+let request_expect label expected conn ~actor ?note ~requester ~recipient () =
   let* r = request conn ~actor ?note ~requester ~recipient () in
   match r with
-  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (Community_fixture.error_str expected)
+  | Ok _ ->
+      Alcotest.failf "%s: expected %s, got Ok" label
+        (Community_fixture.error_str expected)
   | Error e ->
-      Alcotest.(check string) label (Community_fixture.error_str expected) (Community_fixture.error_str e);
+      Alcotest.(check string)
+        label
+        (Community_fixture.error_str expected)
+        (Community_fixture.error_str e);
       Lwt.return_unit
 
 let review conn ~reviewer ~connection ~recipient decision =
@@ -217,13 +202,18 @@ let review_ok label conn ~reviewer ~connection ~recipient decision expected =
       Lwt.return reviewed
   | Error e -> Alcotest.failf "%s: %s" label (Community_fixture.error_str e)
 
-let review_expect label expected conn ~reviewer ~connection ~recipient
-    decision =
+let review_expect label expected conn ~reviewer ~connection ~recipient decision
+    =
   let* r = review conn ~reviewer ~connection ~recipient decision in
   match r with
-  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (Community_fixture.error_str expected)
+  | Ok _ ->
+      Alcotest.failf "%s: expected %s, got Ok" label
+        (Community_fixture.error_str expected)
   | Error e ->
-      Alcotest.(check string) label (Community_fixture.error_str expected) (Community_fixture.error_str e);
+      Alcotest.(check string)
+        label
+        (Community_fixture.error_str expected)
+        (Community_fixture.error_str e);
       Lwt.return_unit
 
 let remove conn ~actor ~connection ~acting =
@@ -244,9 +234,14 @@ let remove_ok label conn ~actor ~connection ~acting =
 let remove_expect label expected conn ~actor ~connection ~acting =
   let* r = remove conn ~actor ~connection ~acting in
   match r with
-  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (Community_fixture.error_str expected)
+  | Ok _ ->
+      Alcotest.failf "%s: expected %s, got Ok" label
+        (Community_fixture.error_str expected)
   | Error e ->
-      Alcotest.(check string) label (Community_fixture.error_str expected) (Community_fixture.error_str e);
+      Alcotest.(check string)
+        label
+        (Community_fixture.error_str expected)
+        (Community_fixture.error_str e);
       Lwt.return_unit
 
 (* Two communities and one actor, the shape every case starts from. *)
@@ -300,14 +295,17 @@ let request_validation_case =
       in
       (* An already-transitioned pure value is never silently reset. *)
       let accepted =
-        match Cc.apply (pending_value ~requester:a ~recipient:b ()) Cc.Accept with
+        match
+          Cc.apply (pending_value ~requester:a ~recipient:b ()) Cc.Accept
+        with
         | Ok v -> v
         | Error _ -> Alcotest.fail "fixture: accept"
       in
       let* r = Store.request conn ~actor_user_id:actor ~connection:accepted in
       (match r with
       | Error Store.Invalid_connection -> ()
-      | Error e -> Alcotest.failf "accepted value: %s" (Community_fixture.error_str e)
+      | Error e ->
+          Alcotest.failf "accepted value: %s" (Community_fixture.error_str e)
       | Ok _ -> Alcotest.fail "accepted value was stored as a request");
       let* n = find conn "no rows" q_count_pair (a, b) in
       Alcotest.(check int) "nothing written" 0 n;
@@ -354,8 +352,9 @@ let request_reversed_case =
       let* n = find conn "row count" q_count_pair (a, b) in
       Alcotest.(check int) "still exactly one row" 1 n;
       (* And equally against an accepted connection. *)
-      let* _ = review_ok "accept" conn ~reviewer:actor ~connection:id
-          ~recipient:b Store.Accept Cc.Accepted
+      let* _ =
+        review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
+          Store.Accept Cc.Accepted
       in
       let* () =
         request_expect "reversed against accepted"
@@ -374,16 +373,18 @@ let accept_case =
       let* actor, a, b = fixture conn "acc" in
       let* reviewer = insert_user conn "ccon_acc_mod" in
       let* id =
-        request_ok "request" conn ~actor ~note:"hello" ~requester:a
-          ~recipient:b ()
+        request_ok "request" conn ~actor ~note:"hello" ~requester:a ~recipient:b
+          ()
       in
       let* reviewed =
         review_ok "accept" conn ~reviewer ~connection:id ~recipient:b
           Store.Accept Cc.Accepted
       in
-      Alcotest.(check int) "requester crosses back" a
+      Alcotest.(check int)
+        "requester crosses back" a
         (Store.reviewed_requester_community_id reviewed);
-      Alcotest.(check int) "recipient crosses back" b
+      Alcotest.(check int)
+        "recipient crosses back" b
         (Store.reviewed_recipient_community_id reviewed);
       let* () =
         check_row "accept" conn id ~status:"accepted" ~note:(Some "hello")
@@ -395,8 +396,10 @@ let accept_case =
       Alcotest.(check bool) "no removal time" false removed_at;
       Alcotest.(check bool) "updated_at coherent" true coherent;
       check_events "accept" conn ~connection:id
-        [ (("community_connection_requested", Some actor), (a, b))
-        ; (("community_connection_accepted", Some reviewer), (a, b)) ])
+        [
+          (("community_connection_requested", Some actor), (a, b));
+          (("community_connection_accepted", Some reviewer), (a, b));
+        ])
 
 let reject_case =
   db_case "reject: the row becomes rejected with one rejected event"
@@ -417,8 +420,10 @@ let reject_case =
       Alcotest.(check bool) "review time set" true reviewed_at;
       Alcotest.(check bool) "no removal time" false removed_at;
       check_events "reject" conn ~connection:id
-        [ (("community_connection_requested", Some actor), (a, b))
-        ; (("community_connection_rejected", Some reviewer), (a, b)) ])
+        [
+          (("community_connection_requested", Some actor), (a, b));
+          (("community_connection_rejected", Some reviewer), (a, b));
+        ])
 
 let review_wrong_recipient_case =
   db_case "review: the recipient is verified in the mutation boundary"
@@ -427,8 +432,8 @@ let review_wrong_recipient_case =
       let* c = insert_community conn "ccon-wrongrec-c" in
       let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
       let* () =
-        review_expect "another community's queue" Store.Review_unavailable
-          conn ~reviewer:actor ~connection:id ~recipient:c Store.Accept
+        review_expect "another community's queue" Store.Review_unavailable conn
+          ~reviewer:actor ~connection:id ~recipient:c Store.Accept
       in
       let* () =
         (* Not even the requesting community may review its own request
@@ -466,12 +471,13 @@ let review_stale_case =
       in
       let* () =
         check_row "still accepted" conn id ~status:"accepted" ~note:None
-          ~requested_by:(Some actor) ~reviewed_by:(Some actor)
-          ~removed_by:None
+          ~requested_by:(Some actor) ~reviewed_by:(Some actor) ~removed_by:None
       in
       check_events "one review only" conn ~connection:id
-        [ (("community_connection_requested", Some actor), (a, b))
-        ; (("community_connection_accepted", Some actor), (a, b)) ])
+        [
+          (("community_connection_requested", Some actor), (a, b));
+          (("community_connection_accepted", Some actor), (a, b));
+        ])
 
 let review_validation_case =
   db_case "review: invalid inputs are refused before any SQL" (fun conn ->
@@ -512,9 +518,11 @@ let remove_from_either_side_case =
         remove_ok "remove from the requester side" conn ~actor:remover
           ~connection:id ~acting:a
       in
-      Alcotest.(check int) "requester crosses back" a
+      Alcotest.(check int)
+        "requester crosses back" a
         (Store.removed_requester_community_id removed);
-      Alcotest.(check int) "recipient crosses back" b
+      Alcotest.(check int)
+        "recipient crosses back" b
         (Store.removed_recipient_community_id removed);
       let* () =
         check_row "removed" conn id ~status:"removed" ~note:None
@@ -527,9 +535,11 @@ let remove_from_either_side_case =
       Alcotest.(check bool) "updated_at coherent" true coherent;
       let* () =
         check_events "remove" conn ~connection:id
-          [ (("community_connection_requested", Some actor), (a, b))
-          ; (("community_connection_accepted", Some actor), (a, b))
-          ; (("community_connection_removed", Some remover), (a, b)) ]
+          [
+            (("community_connection_requested", Some actor), (a, b));
+            (("community_connection_accepted", Some actor), (a, b));
+            (("community_connection_removed", Some remover), (a, b));
+          ]
       in
       (* The other side can remove just as unilaterally. *)
       let* second =
@@ -554,8 +564,8 @@ let remove_stale_case =
       let* stranger = insert_community conn "ccon-rmstale-c" in
       let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
       let* () =
-        remove_expect "a pending row" Store.Removal_unavailable conn
-          ~actor ~connection:id ~acting:a
+        remove_expect "a pending row" Store.Removal_unavailable conn ~actor
+          ~connection:id ~acting:a
       in
       let* _ =
         review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
@@ -572,8 +582,8 @@ let remove_stale_case =
       in
       let* _ = remove_ok "first removal" conn ~actor ~connection:id ~acting:a in
       let* () =
-        remove_expect "a second removal" Store.Removal_unavailable conn
-          ~actor ~connection:id ~acting:b
+        remove_expect "a second removal" Store.Removal_unavailable conn ~actor
+          ~connection:id ~acting:b
       in
       let* () =
         remove_expect "a rejected row is not removable"
@@ -581,9 +591,11 @@ let remove_stale_case =
       in
       (* Exactly one removed event survives all of that. *)
       check_events "one removal only" conn ~connection:id
-        [ (("community_connection_requested", Some actor), (a, b))
-        ; (("community_connection_accepted", Some actor), (a, b))
-        ; (("community_connection_removed", Some actor), (a, b)) ])
+        [
+          (("community_connection_requested", Some actor), (a, b));
+          (("community_connection_accepted", Some actor), (a, b));
+          (("community_connection_removed", Some actor), (a, b));
+        ])
 
 let remove_validation_case =
   db_case "remove: invalid inputs are refused before any SQL" (fun conn ->
@@ -594,8 +606,8 @@ let remove_validation_case =
           ~connection:id ~acting:a
       in
       let* () =
-        remove_expect "zero connection" Store.Invalid_connection_id conn
-          ~actor ~connection:0L ~acting:a
+        remove_expect "zero connection" Store.Invalid_connection_id conn ~actor
+          ~connection:0L ~acting:a
       in
       let* () =
         remove_expect "zero community" Store.Invalid_community_id conn ~actor
@@ -610,7 +622,9 @@ let fresh_request_after_history_case =
   db_case "history: a rejected or removed pair accepts a fresh request"
     (fun conn ->
       let* actor, a, b = fixture conn "fresh" in
-      let* first = request_ok "first" conn ~actor ~requester:a ~recipient:b () in
+      let* first =
+        request_ok "first" conn ~actor ~requester:a ~recipient:b ()
+      in
       let* _ =
         review_ok "reject" conn ~reviewer:actor ~connection:first ~recipient:b
           Store.Reject Cc.Rejected
@@ -621,8 +635,8 @@ let fresh_request_after_history_case =
           ~recipient:a ()
       in
       let* _ =
-        review_ok "accept" conn ~reviewer:actor ~connection:second
-          ~recipient:a Store.Accept Cc.Accepted
+        review_ok "accept" conn ~reviewer:actor ~connection:second ~recipient:a
+          Store.Accept Cc.Accepted
       in
       let* _ = remove_ok "remove" conn ~actor ~connection:second ~acting:b in
       let* third =
@@ -639,8 +653,10 @@ let fresh_request_after_history_case =
       (* Each row keeps its own trail; nothing is reopened or reused. *)
       let* () =
         check_events "first" conn ~connection:first
-          [ (("community_connection_requested", Some actor), (a, b))
-          ; (("community_connection_rejected", Some actor), (a, b)) ]
+          [
+            (("community_connection_requested", Some actor), (a, b));
+            (("community_connection_rejected", Some actor), (a, b));
+          ]
       in
       check_events "third" conn ~connection:third
         [ (("community_connection_requested", Some actor), (a, b)) ])
@@ -650,14 +666,17 @@ let actor_deletion_case =
     (fun conn ->
       let* actor, a, b = fixture conn "ghost" in
       let* reviewer = insert_user conn "ccon_ghost_mod" in
-      let* id = request_ok "request" conn ~actor ~note:"kept" ~requester:a
-          ~recipient:b ()
+      let* id =
+        request_ok "request" conn ~actor ~note:"kept" ~requester:a ~recipient:b
+          ()
       in
       let* _ =
         review_ok "accept" conn ~reviewer ~connection:id ~recipient:b
           Store.Accept Cc.Accepted
       in
-      let* _ = remove_ok "remove" conn ~actor:reviewer ~connection:id ~acting:b in
+      let* _ =
+        remove_ok "remove" conn ~actor:reviewer ~connection:id ~acting:b
+      in
       let* () = exec conn "delete requester" q_delete_user actor in
       let* () = exec conn "delete reviewer" q_delete_user reviewer in
       let* () =
@@ -666,9 +685,11 @@ let actor_deletion_case =
           ~removed_by:None
       in
       check_events "events kept, actors nulled" conn ~connection:id
-        [ (("community_connection_requested", None), (a, b))
-        ; (("community_connection_accepted", None), (a, b))
-        ; (("community_connection_removed", None), (a, b)) ])
+        [
+          (("community_connection_requested", None), (a, b));
+          (("community_connection_accepted", None), (a, b));
+          (("community_connection_removed", None), (a, b));
+        ])
 
 (* === atomicity === *)
 
@@ -676,33 +697,30 @@ let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let q_create_fail_fn =
   ddl
-    "CREATE FUNCTION ccon_fail_fn() RETURNS trigger \
-     LANGUAGE plpgsql \
-     AS 'BEGIN RAISE EXCEPTION ''ccon fixture failure''; END'"
+    "CREATE FUNCTION ccon_fail_fn() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN \
+     RAISE EXCEPTION ''ccon fixture failure''; END'"
 
 let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS ccon_fail_fn()"
 
 let q_poison_audit =
   ddl
-    "CREATE TRIGGER ccon_fail_audit \
-     BEFORE INSERT ON community_connection_audit_events \
-     FOR EACH ROW EXECUTE FUNCTION ccon_fail_fn()"
+    "CREATE TRIGGER ccon_fail_audit BEFORE INSERT ON \
+     community_connection_audit_events FOR EACH ROW EXECUTE FUNCTION \
+     ccon_fail_fn()"
 
 let q_unpoison_audit =
   ddl
-    "DROP TRIGGER IF EXISTS ccon_fail_audit \
-     ON community_connection_audit_events"
+    "DROP TRIGGER IF EXISTS ccon_fail_audit ON \
+     community_connection_audit_events"
 
 let q_poison_insert =
   ddl
-    "CREATE TRIGGER ccon_fail_business \
-     AFTER INSERT ON community_connections \
+    "CREATE TRIGGER ccon_fail_business AFTER INSERT ON community_connections \
      FOR EACH ROW EXECUTE FUNCTION ccon_fail_fn()"
 
 let q_poison_update =
   ddl
-    "CREATE TRIGGER ccon_fail_business \
-     AFTER UPDATE ON community_connections \
+    "CREATE TRIGGER ccon_fail_business AFTER UPDATE ON community_connections \
      FOR EACH ROW EXECUTE FUNCTION ccon_fail_fn()"
 
 let q_unpoison_business =
@@ -730,8 +748,8 @@ let audit_failure_rolls_back_case =
       Alcotest.(check int) "no connection committed" 0 n;
       let* () = check_event_count "no events" conn ~community:a 0 in
       (* And once the poison is gone the very same request commits. *)
-      let* id = request_ok "request afterwards" conn ~actor ~requester:a
-          ~recipient:b ()
+      let* id =
+        request_ok "request afterwards" conn ~actor ~requester:a ~recipient:b ()
       in
       check_events "committed together" conn ~connection:id
         [ (("community_connection_requested", Some actor), (a, b)) ])
@@ -754,9 +772,8 @@ let mutation_failure_leaves_no_event_case =
       let* () =
         with_poison conn ~install:q_poison_update ~remove:q_unpoison_business
           (fun () ->
-            review_expect "accept with the update poisoned"
-              Store.Storage_error conn ~reviewer:actor ~connection:id
-              ~recipient:b Store.Accept)
+            review_expect "accept with the update poisoned" Store.Storage_error
+              conn ~reviewer:actor ~connection:id ~recipient:b Store.Accept)
       in
       let* () =
         check_row "still pending" conn id ~status:"pending" ~note:None
@@ -783,10 +800,12 @@ let concurrent_same_direction_case =
               ()
           | Ok _, Ok _ -> Alcotest.fail "both requests won"
           | Error e, Error e' ->
-              Alcotest.failf "both failed (%s, %s)" (Community_fixture.error_str e)
+              Alcotest.failf "both failed (%s, %s)"
+                (Community_fixture.error_str e)
                 (Community_fixture.error_str e')
           | Ok _, Error e | Error e, Ok _ ->
-              Alcotest.failf "unexpected loser error %s" (Community_fixture.error_str e));
+              Alcotest.failf "unexpected loser error %s"
+                (Community_fixture.error_str e));
           let* total = find conn "row count" q_count_pair (a, b) in
           Alcotest.(check int) "exactly one row" 1 total;
           let* events = find conn "events" q_events_for_community a in
@@ -809,10 +828,12 @@ let concurrent_opposite_direction_case =
               ()
           | Ok _, Ok _ -> Alcotest.fail "both directions won"
           | Error e, Error e' ->
-              Alcotest.failf "both failed (%s, %s)" (Community_fixture.error_str e)
+              Alcotest.failf "both failed (%s, %s)"
+                (Community_fixture.error_str e)
                 (Community_fixture.error_str e')
           | Ok _, Error e | Error e, Ok _ ->
-              Alcotest.failf "unexpected loser error %s" (Community_fixture.error_str e));
+              Alcotest.failf "unexpected loser error %s"
+                (Community_fixture.error_str e));
           let* total = find conn "row count" q_count_pair (a, b) in
           Alcotest.(check int) "exactly one row" 1 total;
           (* Which direction won is deliberately unasserted. *)
@@ -838,13 +859,15 @@ let concurrent_review_case =
               ()
           | Ok _, Ok _ -> Alcotest.fail "both reviews won"
           | Error e, Error e' ->
-              Alcotest.failf "both failed (%s, %s)" (Community_fixture.error_str e)
+              Alcotest.failf "both failed (%s, %s)"
+                (Community_fixture.error_str e)
                 (Community_fixture.error_str e')
           | Ok _, Error e | Error e, Ok _ ->
-              Alcotest.failf "unexpected loser error %s" (Community_fixture.error_str e));
+              Alcotest.failf "unexpected loser error %s"
+                (Community_fixture.error_str e));
           let* events = collect conn "events" q_events id in
-          Alcotest.(check int) "the request plus exactly one review" 2
-            (List.length events);
+          Alcotest.(check int)
+            "the request plus exactly one review" 2 (List.length events);
           Lwt.return_unit))
 
 (* === reads === *)
@@ -854,8 +877,7 @@ let read_ok label = function
   | Error e -> Alcotest.failf "%s: %s" label (read_error_str e)
 
 let read_load_case =
-  db_case "read: one connection loads with its whole durable shape"
-    (fun conn ->
+  db_case "read: one connection loads with its whole durable shape" (fun conn ->
       let* actor, a, b = fixture conn "load" in
       let* id =
         request_ok "request" conn ~actor ~note:"why not" ~requester:a
@@ -869,27 +891,28 @@ let read_load_case =
           Alcotest.(check int64) "id" id row.Read.id;
           Alcotest.(check int) "requester" a row.Read.requester_community_id;
           Alcotest.(check int) "recipient" b row.Read.recipient_community_id;
-          Alcotest.(check string) "status" "pending"
+          Alcotest.(check string)
+            "status" "pending"
             (status_str row.Read.status);
-          Alcotest.(check (option string)) "note" (Some "why not")
-            row.Read.request_note;
-          Alcotest.(check (option int)) "requester actor" (Some actor)
-            row.Read.requested_by_user_id;
-          Alcotest.(check (option int)) "no reviewer" None
-            row.Read.reviewed_by_user_id;
-          Alcotest.(check (option int)) "no remover" None
-            row.Read.removed_by_user_id;
-          Alcotest.(check bool) "created_at present" true
+          Alcotest.(check (option string))
+            "note" (Some "why not") row.Read.request_note;
+          Alcotest.(check (option int))
+            "requester actor" (Some actor) row.Read.requested_by_user_id;
+          Alcotest.(check (option int))
+            "no reviewer" None row.Read.reviewed_by_user_id;
+          Alcotest.(check (option int))
+            "no remover" None row.Read.removed_by_user_id;
+          Alcotest.(check bool)
+            "created_at present" true
             (String.length row.Read.created_at > 0);
-          Alcotest.(check (option string)) "no review time" None
-            row.Read.reviewed_at;
-          Alcotest.(check (option string)) "no removal time" None
-            row.Read.removed_at);
+          Alcotest.(check (option string))
+            "no review time" None row.Read.reviewed_at;
+          Alcotest.(check (option string))
+            "no removal time" None row.Read.removed_at);
       let* absent = find conn "absent id" q_absent_connection_id () in
       let* missing = Read.load conn ~connection_id:absent in
       let* missing = read_ok "absent load" missing in
-      Alcotest.(check bool) "an absent id is simply absent" true
-        (missing = None);
+      Alcotest.(check bool) "an absent id is simply absent" true (missing = None);
       let* invalid = Read.load conn ~connection_id:0L in
       (match invalid with
       | Error Read.Invalid_connection_id -> ()
@@ -898,8 +921,7 @@ let read_load_case =
       Lwt.return_unit)
 
 let read_active_pair_case =
-  db_case "read: the active pair reads the same from either order"
-    (fun conn ->
+  db_case "read: the active pair reads the same from either order" (fun conn ->
       let* actor, a, b = fixture conn "pair" in
       let* none_yet = Read.active_for_pair conn ~community_a:a ~community_b:b in
       let* none_yet = read_ok "empty pair" none_yet in
@@ -923,8 +945,7 @@ let read_active_pair_case =
       in
       let* after = Read.active_for_pair conn ~community_a:a ~community_b:b in
       let* after = read_ok "after rejection" after in
-      Alcotest.(check bool) "history does not hold the slot" true
-        (after = None);
+      Alcotest.(check bool) "history does not hold the slot" true (after = None);
       let* self = Read.active_for_pair conn ~community_a:a ~community_b:a in
       (match self with
       | Error Read.Invalid_community_id -> ()
@@ -951,15 +972,15 @@ let read_symmetric_accepted_case =
       ignore third;
       let ids label rows =
         let got = List.map (fun r -> r.Read.id) rows in
-        Alcotest.(check int) (label ^ ": count") (List.length rows)
-          (List.length got);
+        Alcotest.(check int)
+          (label ^ ": count") (List.length rows) (List.length got);
         got
       in
       let* from_a = Read.list_accepted conn ~community_id:a in
       let* from_a = read_ok "from a" from_a in
       Alcotest.(check (list int64))
-        "a sees both of its accepted connections"
-        [ second; first ] (ids "a" from_a);
+        "a sees both of its accepted connections" [ second; first ]
+        (ids "a" from_a);
       let* from_b = Read.list_accepted conn ~community_id:b in
       let* from_b = read_ok "from b" from_b in
       Alcotest.(check (list int64))
@@ -973,12 +994,12 @@ let read_symmetric_accepted_case =
       let* _ = remove_ok "remove" conn ~actor ~connection:first ~acting:b in
       let* from_a = Read.list_accepted conn ~community_id:a in
       let* from_a = read_ok "from a after removal" from_a in
-      Alcotest.(check (list int64)) "a no longer sees it" [ second ]
-        (ids "a" from_a);
+      Alcotest.(check (list int64))
+        "a no longer sees it" [ second ] (ids "a" from_a);
       let* from_b = Read.list_accepted conn ~community_id:b in
       let* from_b = read_ok "from b after removal" from_b in
-      Alcotest.(check (list int64)) "b no longer sees it either" []
-        (ids "b" from_b);
+      Alcotest.(check (list int64))
+        "b no longer sees it either" [] (ids "b" from_b);
       Lwt.return_unit)
 
 let read_queues_case =
@@ -986,16 +1007,20 @@ let read_queues_case =
     (fun conn ->
       let* actor, a, b = fixture conn "queue" in
       let* c = insert_community conn "ccon-queue-c" in
-      let* incoming = request_ok "b→a" conn ~actor ~requester:b ~recipient:a () in
-      let* outgoing = request_ok "a→c" conn ~actor ~requester:a ~recipient:c () in
+      let* incoming =
+        request_ok "b→a" conn ~actor ~requester:b ~recipient:a ()
+      in
+      let* outgoing =
+        request_ok "a→c" conn ~actor ~requester:a ~recipient:c ()
+      in
       let ids rows = List.map (fun r -> r.Read.id) rows in
       let* q_in = Read.list_incoming_pending conn ~community_id:a in
       let* q_in = read_ok "incoming" q_in in
       Alcotest.(check (list int64)) "a's review queue" [ incoming ] (ids q_in);
       let* q_out = Read.list_outgoing_pending conn ~community_id:a in
       let* q_out = read_ok "outgoing" q_out in
-      Alcotest.(check (list int64)) "a's awaiting queue" [ outgoing ]
-        (ids q_out);
+      Alcotest.(check (list int64))
+        "a's awaiting queue" [ outgoing ] (ids q_out);
       (* Reviewing empties the queue it was in, and no other. *)
       let* _ =
         review_ok "accept" conn ~reviewer:actor ~connection:incoming
@@ -1003,12 +1028,12 @@ let read_queues_case =
       in
       let* q_in = Read.list_incoming_pending conn ~community_id:a in
       let* q_in = read_ok "incoming after review" q_in in
-      Alcotest.(check (list int64)) "the reviewed request left the queue" []
-        (ids q_in);
+      Alcotest.(check (list int64))
+        "the reviewed request left the queue" [] (ids q_in);
       let* q_out = Read.list_outgoing_pending conn ~community_id:a in
       let* q_out = read_ok "outgoing after review" q_out in
-      Alcotest.(check (list int64)) "the outgoing one is untouched"
-        [ outgoing ] (ids q_out);
+      Alcotest.(check (list int64))
+        "the outgoing one is untouched" [ outgoing ] (ids q_out);
       let* invalid = Read.list_incoming_pending conn ~community_id:0 in
       (match invalid with
       | Error Read.Invalid_community_id -> ()
@@ -1030,48 +1055,70 @@ let read_audit_case =
       let* events = read_ok "trail" events in
       Alcotest.(check (list string))
         "the three actions in order"
-        [ "community_connection_requested"; "community_connection_accepted"
-        ; "community_connection_removed" ]
+        [
+          "community_connection_requested";
+          "community_connection_accepted";
+          "community_connection_removed";
+        ]
         (List.map (fun e -> action_str e.Read.event_action) events);
       List.iter
         (fun e ->
-          Alcotest.(check (option int)) "actor" (Some actor)
-            e.Read.event_actor_user_id;
+          Alcotest.(check (option int))
+            "actor" (Some actor) e.Read.event_actor_user_id;
           Alcotest.(check int64) "connection" id e.Read.event_connection_id;
-          Alcotest.(check int) "requester" a
-            e.Read.event_requester_community_id;
-          Alcotest.(check int) "recipient" b
-            e.Read.event_recipient_community_id)
+          Alcotest.(check int) "requester" a e.Read.event_requester_community_id;
+          Alcotest.(check int) "recipient" b e.Read.event_recipient_community_id)
         events;
       let* absent = find conn "absent id" q_absent_connection_id () in
       let* empty = Read.list_audit_events conn ~connection_id:absent in
       let* empty = read_ok "absent trail" empty in
-      Alcotest.(check int) "an absent connection has no trail" 0
-        (List.length empty);
+      Alcotest.(check int)
+        "an absent connection has no trail" 0 (List.length empty);
       Lwt.return_unit)
 
 let store_suite =
-  [ request_case; request_blank_note_case; request_validation_case
-  ; request_missing_community_case; request_duplicate_case
-  ; request_reversed_case; accept_case; reject_case
-  ; review_wrong_recipient_case; review_stale_case; review_validation_case
-  ; remove_from_either_side_case; remove_stale_case; remove_validation_case
-  ; fresh_request_after_history_case; actor_deletion_case ]
+  [
+    request_case;
+    request_blank_note_case;
+    request_validation_case;
+    request_missing_community_case;
+    request_duplicate_case;
+    request_reversed_case;
+    accept_case;
+    reject_case;
+    review_wrong_recipient_case;
+    review_stale_case;
+    review_validation_case;
+    remove_from_either_side_case;
+    remove_stale_case;
+    remove_validation_case;
+    fresh_request_after_history_case;
+    actor_deletion_case;
+  ]
 
 let atomicity_suite =
   [ audit_failure_rolls_back_case; mutation_failure_leaves_no_event_case ]
 
 let concurrency_suite =
-  [ concurrent_same_direction_case; concurrent_opposite_direction_case
-  ; concurrent_review_case ]
+  [
+    concurrent_same_direction_case;
+    concurrent_opposite_direction_case;
+    concurrent_review_case;
+  ]
 
 let read_suite =
-  [ read_load_case; read_active_pair_case; read_symmetric_accepted_case
-  ; read_queues_case; read_audit_case ]
+  [
+    read_load_case;
+    read_active_pair_case;
+    read_symmetric_accepted_case;
+    read_queues_case;
+    read_audit_case;
+  ]
 
 let suites =
-  [ ("community_connections_store", store_suite)
-  ; ("community_connections_atomicity", atomicity_suite)
-  ; ("community_connections_concurrency", concurrency_suite)
-  ; ("community_connections_reads", read_suite)
+  [
+    ("community_connections_store", store_suite);
+    ("community_connections_atomicity", atomicity_suite);
+    ("community_connections_concurrency", concurrency_suite);
+    ("community_connections_reads", read_suite);
   ]

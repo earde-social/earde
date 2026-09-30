@@ -46,7 +46,8 @@ let authenticated_user_id request =
    origin-gated routes, and a no-referrer document makes the browser send
    Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -55,7 +56,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -86,8 +88,8 @@ let bad_request_page request =
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 (* One generic 500 for every read-model or store failure past the gates — no
    Caqti/PostgreSQL detail, error constructor, or fixture value ever reaches
@@ -204,7 +206,11 @@ let values_of_view view : Pages_phv.form_values =
    boundary. Dream has already stripped its own CSRF field, so it can never
    appear among these. *)
 let blank_values : Pages_phv.form_values =
-  { Pages_phv.community_name = ""; community_slug = ""; community_description = "" }
+  {
+    Pages_phv.community_name = "";
+    community_slug = "";
+    community_description = "";
+  }
 
 let submitted_values fields : Pages_phv.form_values =
   let exactly_once name =
@@ -220,7 +226,8 @@ let submitted_values fields : Pages_phv.form_values =
         exactly_once "community_description" )
     with
     | Some name, Some slug, Some description ->
-        { Pages_phv.community_name = name;
+        {
+          Pages_phv.community_name = name;
           community_slug = slug;
           community_description = description;
         }
@@ -239,7 +246,8 @@ let submitted_values fields : Pages_phv.form_values =
 let respond_owner_authorized request ~user_id ~project_slug ~values_of ~feedback
     ~status =
   let%lwt loaded =
-    Dream.sql request (fun db -> Read.load_for_steward db ~user_id ~project_slug)
+    Dream.sql request (fun db ->
+        Read.load_for_steward db ~user_id ~project_slug)
   in
   match loaded with
   (* Nonexistent, foreign, non-steward, stale, revoked, pending, and
@@ -277,22 +285,22 @@ let handle_store_result request ~user_id ~slug ~values = function
            invariant, not a public state: the generic 500, never a redirect
            that names it. *)
         server_error_page request
-      else
+      else (
         (* The provisioning transaction committed: the private setup draft,
            its initial role/shell, the accepted home relation and the audit
            event all exist. The created community's slug, name and
            description deliberately do not cross — and neither does a
            community id, which the store's narrow result does not carry.
            Consent-gated and best-effort. *)
-        (Analytics.capture_if_consented request
-           ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-           (Analytics.Dedicated_home_provisioned { user_id });
-         (* PRG into the new private setup draft. The canonical slug comes
+        Analytics.capture_if_consented request
+          ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+          (Analytics.Dedicated_home_provisioned { user_id });
+        (* PRG into the new private setup draft. The canonical slug comes
             only from the store; no submitted value, id, or result token
             enters the URL. *)
-         Lwt.return
-           (community_settings_redirect
-              ~community_slug:(Store.community_slug home)))
+        Lwt.return
+          (community_settings_redirect
+             ~community_slug:(Store.community_slug home)))
   | Error Store.Project_unavailable ->
       (* Missing, foreign, unstewarded, stale, revoked, and a durable admin
          who is not a steward collapse to the one generic 404 — never a
@@ -311,8 +319,7 @@ let handle_store_result request ~user_id ~slug ~values = function
          network status. *)
       respond_owner_authorized request ~user_id ~project_slug:slug
         ~values_of:(fun _ -> values)
-        ~feedback:(Some Pages_phv.Community_slug_unavailable)
-        ~status:`Conflict
+        ~feedback:(Some Pages_phv.Community_slug_unavailable) ~status:`Conflict
   | Error Store.Active_home_exists ->
       (* A pre-existing or concurrently committed relation — including a
          replayed successful submission. The authoritative current-home GET
@@ -332,10 +339,10 @@ let make_project_home_provisioning_handler ~mode ~load_config request =
       | Some slug -> (
           match load_config () with
           | Error _ -> unavailable_page request
-          | Ok config ->
+          | Ok config -> (
               if not (Request_origin.same_origin_request config request) then
                 forbidden_page request
-              else (
+              else
                 (* Dream's form API enforces the URL-encoded content type and
                    verifies its own CSRF field, which it strips from the
                    returned fields — so the strict parser below sees
@@ -362,8 +369,7 @@ let make_project_home_provisioning_handler ~mode ~load_config request =
                 | `Wrong_content_type -> bad_request_page request
                 | `Expired _ | `Wrong_session _ | `Invalid_token _
                 | `Missing_token _ | `Many_tokens _ ->
-                    respond_owner_authorized request ~user_id
-                      ~project_slug:slug
+                    respond_owner_authorized request ~user_id ~project_slug:slug
                       ~values_of:(fun _ -> blank_values)
                       ~feedback:(Some Pages_phv.Stale_form) ~status:`Forbidden
                 | `Ok fields -> (

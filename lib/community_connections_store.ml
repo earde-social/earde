@@ -22,14 +22,10 @@
    .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Cc = Community_connections
 module Notifications = Community_connection_notifications
 
-type decision =
-  | Accept
-  | Reject
-
+type decision = Accept | Reject
 type created_connection = { created_id : int64 }
 
 let created_connection_id { created_id } = created_id
@@ -59,11 +55,8 @@ type removed_connection = {
 }
 
 let removed_connection_id { removed_id; _ } = removed_id
-
 let removed_requester_community_id { removed_requester; _ } = removed_requester
-
 let removed_recipient_community_id { removed_recipient; _ } = removed_recipient
-
 let removed_status { removed_result; _ } = removed_result
 
 type error =
@@ -98,10 +91,8 @@ let positive id = Int64.compare id 0L > 0
 let lock_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.(t2 (t2 int string) (t2 string bool)))
-  "SELECT id, visibility, onboarding_state, discoverable \
-   FROM communities \
-   WHERE id = $1 \
-   FOR SHARE"
+    "SELECT id, visibility, onboarding_state, discoverable FROM communities \
+     WHERE id = $1 FOR SHARE"
 
 (* The conflict target is the partial unique active-pair index, written
    exactly as the migration declares it so PostgreSQL infers that index and
@@ -115,16 +106,13 @@ let lock_community_query =
 let insert_connection_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int int) (t2 int (option string))) ->? Caqti_type.int64)
-  "INSERT INTO community_connections \
-     (requester_community_id, recipient_community_id, status, \
-      requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
-      request_note, reviewed_at, removed_at) \
-   VALUES ($1, $2, 'pending', $3, NULL, NULL, $4, NULL, NULL) \
-   ON CONFLICT (LEAST(requester_community_id, recipient_community_id), \
-                GREATEST(requester_community_id, recipient_community_id)) \
-     WHERE status IN ('pending', 'accepted') \
-   DO NOTHING \
-   RETURNING id"
+    "INSERT INTO community_connections (requester_community_id, \
+     recipient_community_id, status, requested_by_user_id, \
+     reviewed_by_user_id, removed_by_user_id, request_note, reviewed_at, \
+     removed_at) VALUES ($1, $2, 'pending', $3, NULL, NULL, $4, NULL, NULL) ON \
+     CONFLICT (LEAST(requester_community_id, recipient_community_id), \
+     GREATEST(requester_community_id, recipient_community_id)) WHERE status IN \
+     ('pending', 'accepted') DO NOTHING RETURNING id"
 
 (* The exact pending connection addressed to the exact recipient, locked as
    the only durable row this transaction mutates. Every zero-row cause (no
@@ -133,16 +121,14 @@ let insert_connection_query =
 let lock_pending_connection_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 int (option string)))
-           (t2 (t3 (option int) (option int) (option int)) (t2 bool bool))))
-  "SELECT id, requester_community_id, recipient_community_id, request_note, \
-          requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
-          reviewed_at IS NULL, removed_at IS NULL \
-   FROM community_connections \
-   WHERE id = $1 AND recipient_community_id = $2 AND status = 'pending' \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 int (option string)))
+          (t2 (t3 (option int) (option int) (option int)) (t2 bool bool))))
+    "SELECT id, requester_community_id, recipient_community_id, request_note, \
+     requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+     reviewed_at IS NULL, removed_at IS NULL FROM community_connections WHERE \
+     id = $1 AND recipient_community_id = $2 AND status = 'pending' FOR UPDATE"
 
 (* The one review mutation: the locked row, guarded again on both the
    pending status and the expected recipient, so a zero count is a completed
@@ -155,16 +141,12 @@ let lock_pending_connection_query =
 let review_connection_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int64 string) (t2 int int))
-   ->* Caqti_type.(t2 int64 string))
-  "UPDATE community_connections \
-   SET status = $2, \
-       reviewed_by_user_id = $3, \
-       reviewed_at = GREATEST(NOW(), created_at), \
-       removed_by_user_id = NULL, \
-       removed_at = NULL, \
-       updated_at = GREATEST(NOW(), created_at) \
-   WHERE id = $1 AND status = 'pending' AND recipient_community_id = $4 \
-   RETURNING id, status"
+  ->* Caqti_type.(t2 int64 string))
+    "UPDATE community_connections SET status = $2, reviewed_by_user_id = $3, \
+     reviewed_at = GREATEST(NOW(), created_at), removed_by_user_id = NULL, \
+     removed_at = NULL, updated_at = GREATEST(NOW(), created_at) WHERE id = $1 \
+     AND status = 'pending' AND recipient_community_id = $4 RETURNING id, \
+     status"
 
 (* The exact accepted connection one of whose two communities is the acting
    one — a mutual connection is symmetric, so the boundary is membership in
@@ -173,17 +155,15 @@ let review_connection_query =
 let lock_accepted_connection_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 int (option string)))
-           (t2 (t3 (option int) (option int) (option int)) (t2 bool bool))))
-  "SELECT id, requester_community_id, recipient_community_id, request_note, \
-          requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
-          reviewed_at IS NOT NULL, removed_at IS NULL \
-   FROM community_connections \
-   WHERE id = $1 AND status = 'accepted' \
-     AND (requester_community_id = $2 OR recipient_community_id = $2) \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 int (option string)))
+          (t2 (t3 (option int) (option int) (option int)) (t2 bool bool))))
+    "SELECT id, requester_community_id, recipient_community_id, request_note, \
+     requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+     reviewed_at IS NOT NULL, removed_at IS NULL FROM community_connections \
+     WHERE id = $1 AND status = 'accepted' AND (requester_community_id = $2 OR \
+     recipient_community_id = $2) FOR UPDATE"
 
 (* The one removal mutation, guarded again on the accepted status and on the
    acting community's membership in the pair. reviewed_at is NOT NULL on
@@ -194,15 +174,12 @@ let lock_accepted_connection_query =
 let remove_connection_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int64 string) (t2 int int))
-   ->* Caqti_type.(t2 int64 string))
-  "UPDATE community_connections \
-   SET status = $2, \
-       removed_by_user_id = $3, \
-       removed_at = GREATEST(NOW(), created_at, reviewed_at), \
-       updated_at = GREATEST(NOW(), created_at, reviewed_at) \
-   WHERE id = $1 AND status = 'accepted' \
-     AND (requester_community_id = $4 OR recipient_community_id = $4) \
-   RETURNING id, status"
+  ->* Caqti_type.(t2 int64 string))
+    "UPDATE community_connections SET status = $2, removed_by_user_id = $3, \
+     removed_at = GREATEST(NOW(), created_at, reviewed_at), updated_at = \
+     GREATEST(NOW(), created_at, reviewed_at) WHERE id = $1 AND status = \
+     'accepted' AND (requester_community_id = $4 OR recipient_community_id = \
+     $4) RETURNING id, status"
 
 (* The exact pair of one row, read WITHOUT a lock, solely so the two
    communities can then be locked in the one global ascending order. Never a
@@ -212,17 +189,16 @@ let remove_connection_query =
 let discover_pending_pair_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.(t2 int int))
-  "SELECT requester_community_id, recipient_community_id \
-   FROM community_connections \
-   WHERE id = $1 AND recipient_community_id = $2 AND status = 'pending'"
+    "SELECT requester_community_id, recipient_community_id FROM \
+     community_connections WHERE id = $1 AND recipient_community_id = $2 AND \
+     status = 'pending'"
 
 let discover_accepted_pair_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.(t2 int int))
-  "SELECT requester_community_id, recipient_community_id \
-   FROM community_connections \
-   WHERE id = $1 AND status = 'accepted' \
-     AND (requester_community_id = $2 OR recipient_community_id = $2)"
+    "SELECT requester_community_id, recipient_community_id FROM \
+     community_connections WHERE id = $1 AND status = 'accepted' AND \
+     (requester_community_id = $2 OR recipient_community_id = $2)"
 
 (* === shared helpers === *)
 
@@ -296,8 +272,10 @@ let with_notifications (module C : Caqti_lwt.CONNECTION) ~rollback_to ~kind
    incoherence — that is Inconsistent_data at the call site, never a
    silently repaired value. *)
 let reconstruct ~requester ~recipient ~note ~target =
-  match Cc.create_pending ~requester_community_id:requester
-          ~recipient_community_id:recipient ~request_note:note with
+  match
+    Cc.create_pending ~requester_community_id:requester
+      ~recipient_community_id:recipient ~request_note:note
+  with
   | Error _ -> None
   | Ok pending ->
       (* The stored note must round-trip byte-exactly: a durable note the
@@ -348,12 +326,11 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection =
                its own moderators learn about their own community rather than
                about the target's state. *)
             if not requester_eligible then rollback_to Requester_ineligible
-            else if not recipient_eligible then
-              rollback_to Recipient_ineligible
+            else if not recipient_eligible then rollback_to Recipient_ineligible
             else
               C.find_opt insert_connection_query
-                ((requester, recipient),
-                 (actor_user_id, Cc.request_note connection))
+                ( (requester, recipient),
+                  (actor_user_id, Cc.request_note connection) )
               >>= function
               | Error _ -> rollback_to Storage_error
               | Ok None ->
@@ -362,9 +339,9 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection =
                      direction. The conflict never surfaces as a raw SQL
                      diagnostic. *)
                   rollback_to Active_connection_exists
-              | Ok (Some new_id) ->
+              | Ok (Some new_id) -> (
                   if not (positive new_id) then rollback_to Inconsistent_data
-                  else (
+                  else
                     (* The audit event rides the same transaction: inserted
                        only once the pending row is validated, and any audit
                        failure rolls the whole request back — a committed
@@ -394,8 +371,7 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection =
                           (fun () ->
                             C.commit () >>= function
                             | Error _ -> Lwt.return (Error Storage_error)
-                            | Ok () ->
-                                Lwt.return (Ok { created_id = new_id }))))
+                            | Ok () -> Lwt.return (Ok { created_id = new_id }))))
 
 (* === review === *)
 
@@ -429,124 +405,139 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~connection_id
                 ~rollback_to ~requester:discovered_requester
                 ~recipient:discovered_recipient
                 (fun ~requester_eligible ~recipient_eligible ->
-        C.find_opt lock_pending_connection_query
-          (connection_id, recipient_community_id)
-        >>= function
-        | Error _ -> rollback_to Storage_error
-        | Ok None -> rollback_to Review_unavailable
-        | Ok
-            (Some
-              ( ((row_id, requester), (recipient, stored_note)),
-                ( (requested_by, reviewed_by, removed_by),
-                  (reviewed_at_null, removed_at_null) ) )) -> (
-            let row_shape_ok =
-              Int64.equal row_id connection_id
-              && recipient = recipient_community_id
-              && requester > 0
-              && requester <> recipient
-              (* The locked row must still be the pair the locks were taken
+                  C.find_opt lock_pending_connection_query
+                    (connection_id, recipient_community_id)
+                  >>= function
+                  | Error _ -> rollback_to Storage_error
+                  | Ok None -> rollback_to Review_unavailable
+                  | Ok
+                      (Some
+                         ( ((row_id, requester), (recipient, stored_note)),
+                           ( (requested_by, reviewed_by, removed_by),
+                             (reviewed_at_null, removed_at_null) ) )) -> (
+                      let row_shape_ok =
+                        Int64.equal row_id connection_id
+                        && recipient = recipient_community_id
+                        && requester > 0 && requester <> recipient
+                        (* The locked row must still be the pair the locks were taken
                  for; the two columns are immutable, so a difference is
                  durable corruption rather than a race. *)
-              && requester = discovered_requester
-              && recipient = discovered_recipient
-              && (match requested_by with None -> true | Some id -> id > 0)
-              && reviewed_by = None && removed_by = None && reviewed_at_null
-              && removed_at_null
-            in
-            let target =
-              match decision with Accept -> Cc.Accepted | Reject -> Cc.Rejected
-            in
-            match
-              ( row_shape_ok,
-                reconstruct ~requester ~recipient ~note:stored_note ~target )
-            with
-            | false, _ | _, None -> rollback_to Inconsistent_data
-            (* Accepting creates the connection, so it needs current
+                        && requester = discovered_requester
+                        && recipient = discovered_recipient
+                        && (match requested_by with
+                          | None -> true
+                          | Some id -> id > 0)
+                        && reviewed_by = None && removed_by = None
+                        && reviewed_at_null && removed_at_null
+                      in
+                      let target =
+                        match decision with
+                        | Accept -> Cc.Accepted
+                        | Reject -> Cc.Rejected
+                      in
+                      match
+                        ( row_shape_ok,
+                          reconstruct ~requester ~recipient ~note:stored_note
+                            ~target )
+                      with
+                      | false, _ | _, None -> rollback_to Inconsistent_data
+                      (* Accepting creates the connection, so it needs current
                eligibility on both sides, revalidated under the held locks.
                The reviewing community is answered first — that is the one
                its own moderators are entitled to hear about. Rejection
                deliberately reaches none of this and stays available on an
                ineligible pair. *)
-            | true, Some _ when decision = Accept && not recipient_eligible ->
-                rollback_to Recipient_ineligible
-            | true, Some _ when decision = Accept && not requester_eligible ->
-                rollback_to Requester_ineligible
-            | true, Some reviewed -> (
-                let new_status = Cc.status reviewed in
-                let status_string = Cc.string_of_status new_status in
-                C.collect_list review_connection_query
-                  ((connection_id, status_string),
-                   (reviewer_user_id, recipient_community_id))
-                >>= function
-                | Error _ ->
-                    (* Includes any unexpected constraint failure — the
+                      | true, Some _
+                        when decision = Accept && not recipient_eligible ->
+                          rollback_to Recipient_ineligible
+                      | true, Some _
+                        when decision = Accept && not requester_eligible ->
+                          rollback_to Requester_ineligible
+                      | true, Some reviewed -> (
+                          let new_status = Cc.status reviewed in
+                          let status_string = Cc.string_of_status new_status in
+                          C.collect_list review_connection_query
+                            ( (connection_id, status_string),
+                              (reviewer_user_id, recipient_community_id) )
+                          >>= function
+                          | Error _ ->
+                              (* Includes any unexpected constraint failure — the
                        pending row already holds the active-pair slot, so a
                        unique conflict here is impossible under the locked
                        protocol. *)
-                    rollback_to Storage_error
-                | Ok [] -> rollback_to Review_unavailable
-                | Ok [ (updated_id, updated_status) ] ->
-                    if
-                      not
-                        (Int64.equal updated_id connection_id
-                        && String.equal updated_status status_string)
-                    then rollback_to Inconsistent_data
-                    else (
-                      Community_connection_audit.insert
-                        (module C)
-                        ~action:
-                          (match decision with
-                          | Accept ->
-                              Community_connection_audit.Connection_accepted
-                          | Reject ->
-                              Community_connection_audit.Connection_rejected)
-                        ~actor_user_id:reviewer_user_id ~connection_id
-                        ~requester_community_id:requester
-                        ~recipient_community_id:recipient
-                      >>= function
-                      | Error Community_connection_audit.Inconsistent_data ->
-                          rollback_to Inconsistent_data
-                      | Error Community_connection_audit.Storage_error ->
-                          rollback_to Storage_error
-                      | Ok () ->
-                          (* A review answers the requesting community, so its
+                              rollback_to Storage_error
+                          | Ok [] -> rollback_to Review_unavailable
+                          | Ok [ (updated_id, updated_status) ] -> (
+                              if
+                                not
+                                  (Int64.equal updated_id connection_id
+                                  && String.equal updated_status status_string)
+                              then rollback_to Inconsistent_data
+                              else
+                                Community_connection_audit.insert
+                                  (module C)
+                                  ~action:
+                                    (match decision with
+                                    | Accept ->
+                                        Community_connection_audit
+                                        .Connection_accepted
+                                    | Reject ->
+                                        Community_connection_audit
+                                        .Connection_rejected)
+                                  ~actor_user_id:reviewer_user_id ~connection_id
+                                  ~requester_community_id:requester
+                                  ~recipient_community_id:recipient
+                                >>= function
+                                | Error
+                                    Community_connection_audit.Inconsistent_data
+                                  ->
+                                    rollback_to Inconsistent_data
+                                | Error Community_connection_audit.Storage_error
+                                  ->
+                                    rollback_to Storage_error
+                                | Ok () ->
+                                    (* A review answers the requesting community, so its
                              own top moderators hear about it and their
                              management context is that community. The
                              reviewing side is not notified: it is the side
                              that just acted. *)
-                          with_notifications
-                            (module C)
-                            ~rollback_to
-                            ~kind:
-                              (match decision with
-                              | Accept -> Notifications.Connection_accepted
-                              | Reject -> Notifications.Connection_rejected)
-                            ~actor_user_id:reviewer_user_id
-                            ~community_id:requester ~connection_id
-                            (fun () ->
-                              C.commit () >>= function
-                              | Error _ -> Lwt.return (Error Storage_error)
-                              | Ok () ->
-                                  Lwt.return
-                                    (Ok
-                                       {
-                                         reviewed_id = connection_id;
-                                         reviewed_requester = requester;
-                                         reviewed_recipient = recipient;
-                                         reviewed_result = new_status;
-                                       })))
-                | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data))))
+                                    with_notifications
+                                      (module C)
+                                      ~rollback_to
+                                      ~kind:
+                                        (match decision with
+                                        | Accept ->
+                                            Notifications.Connection_accepted
+                                        | Reject ->
+                                            Notifications.Connection_rejected)
+                                      ~actor_user_id:reviewer_user_id
+                                      ~community_id:requester ~connection_id
+                                      (fun () ->
+                                        C.commit () >>= function
+                                        | Error _ ->
+                                            Lwt.return (Error Storage_error)
+                                        | Ok () ->
+                                            Lwt.return
+                                              (Ok
+                                                 {
+                                                   reviewed_id = connection_id;
+                                                   reviewed_requester =
+                                                     requester;
+                                                   reviewed_recipient =
+                                                     recipient;
+                                                   reviewed_result = new_status;
+                                                 })))
+                          | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data)))
+        )
 
 (* === remove === *)
-
 
 let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection_id
     ~acting_community_id =
   if actor_user_id <= 0 then Lwt.return (Error Invalid_user_id)
   else if not (positive connection_id) then
     Lwt.return (Error Invalid_connection_id)
-  else if acting_community_id <= 0 then
-    Lwt.return (Error Invalid_community_id)
+  else if acting_community_id <= 0 then Lwt.return (Error Invalid_community_id)
   else
     let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
     C.start () >>= function
@@ -573,86 +564,101 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection_id
                 ~rollback_to ~requester:discovered_requester
                 ~recipient:discovered_recipient
                 (fun ~requester_eligible:_ ~recipient_eligible:_ ->
-        C.find_opt lock_accepted_connection_query
-          (connection_id, acting_community_id)
-        >>= function
-        | Error _ -> rollback_to Storage_error
-        | Ok None -> rollback_to Removal_unavailable
-        | Ok
-            (Some
-              ( ((row_id, requester), (recipient, stored_note)),
-                ( (requested_by, reviewed_by, removed_by),
-                  (reviewed_at_present, removed_at_null) ) )) -> (
-            let row_shape_ok =
-              Int64.equal row_id connection_id
-              && requester > 0 && recipient > 0
-              && requester <> recipient
-              && requester = discovered_requester
-              && recipient = discovered_recipient
-              && (requester = acting_community_id
-                 || recipient = acting_community_id)
-              && (match requested_by with None -> true | Some id -> id > 0)
-              && (match reviewed_by with None -> true | Some id -> id > 0)
-              && removed_by = None && reviewed_at_present && removed_at_null
-            in
-            match
-              ( row_shape_ok,
-                reconstruct ~requester ~recipient ~note:stored_note
-                  ~target:Cc.Removed )
-            with
-            | false, _ | _, None -> rollback_to Inconsistent_data
-            | true, Some removed -> (
-                let new_status = Cc.status removed in
-                let status_string = Cc.string_of_status new_status in
-                C.collect_list remove_connection_query
-                  ((connection_id, status_string),
-                   (actor_user_id, acting_community_id))
-                >>= function
-                | Error _ -> rollback_to Storage_error
-                | Ok [] -> rollback_to Removal_unavailable
-                | Ok [ (updated_id, updated_status) ] ->
-                    if
-                      not
-                        (Int64.equal updated_id connection_id
-                        && String.equal updated_status status_string)
-                    then rollback_to Inconsistent_data
-                    else (
-                      Community_connection_audit.insert
-                        (module C)
-                        ~action:Community_connection_audit.Connection_removed
-                        ~actor_user_id ~connection_id
-                        ~requester_community_id:requester
-                        ~recipient_community_id:recipient
-                      >>= function
-                      | Error Community_connection_audit.Inconsistent_data ->
-                          rollback_to Inconsistent_data
-                      | Error Community_connection_audit.Storage_error ->
-                          rollback_to Storage_error
-                      | Ok () ->
-                          (* Removal is symmetric — either side may detach —
+                  C.find_opt lock_accepted_connection_query
+                    (connection_id, acting_community_id)
+                  >>= function
+                  | Error _ -> rollback_to Storage_error
+                  | Ok None -> rollback_to Removal_unavailable
+                  | Ok
+                      (Some
+                         ( ((row_id, requester), (recipient, stored_note)),
+                           ( (requested_by, reviewed_by, removed_by),
+                             (reviewed_at_present, removed_at_null) ) )) -> (
+                      let row_shape_ok =
+                        Int64.equal row_id connection_id
+                        && requester > 0 && recipient > 0
+                        && requester <> recipient
+                        && requester = discovered_requester
+                        && recipient = discovered_recipient
+                        && (requester = acting_community_id
+                           || recipient = acting_community_id)
+                        && (match requested_by with
+                          | None -> true
+                          | Some id -> id > 0)
+                        && (match reviewed_by with
+                          | None -> true
+                          | Some id -> id > 0)
+                        && removed_by = None && reviewed_at_present
+                        && removed_at_null
+                      in
+                      match
+                        ( row_shape_ok,
+                          reconstruct ~requester ~recipient ~note:stored_note
+                            ~target:Cc.Removed )
+                      with
+                      | false, _ | _, None -> rollback_to Inconsistent_data
+                      | true, Some removed -> (
+                          let new_status = Cc.status removed in
+                          let status_string = Cc.string_of_status new_status in
+                          C.collect_list remove_connection_query
+                            ( (connection_id, status_string),
+                              (actor_user_id, acting_community_id) )
+                          >>= function
+                          | Error _ -> rollback_to Storage_error
+                          | Ok [] -> rollback_to Removal_unavailable
+                          | Ok [ (updated_id, updated_status) ] -> (
+                              if
+                                not
+                                  (Int64.equal updated_id connection_id
+                                  && String.equal updated_status status_string)
+                              then rollback_to Inconsistent_data
+                              else
+                                Community_connection_audit.insert
+                                  (module C)
+                                  ~action:
+                                    Community_connection_audit
+                                    .Connection_removed ~actor_user_id
+                                  ~connection_id
+                                  ~requester_community_id:requester
+                                  ~recipient_community_id:recipient
+                                >>= function
+                                | Error
+                                    Community_connection_audit.Inconsistent_data
+                                  ->
+                                    rollback_to Inconsistent_data
+                                | Error Community_connection_audit.Storage_error
+                                  ->
+                                    rollback_to Storage_error
+                                | Ok () ->
+                                    (* Removal is symmetric — either side may detach —
                              so the notified side is whichever community did
                              not act, derived from the acting community the
                              guarded UPDATE already verified is in the pair.
                              That community is also the notified moderators'
                              own management context. *)
-                          let opposite =
-                            if acting_community_id = requester then recipient
-                            else requester
-                          in
-                          with_notifications
-                            (module C)
-                            ~rollback_to ~kind:Notifications.Connection_removed
-                            ~actor_user_id ~community_id:opposite ~connection_id
-                            (fun () ->
-                              C.commit () >>= function
-                              | Error _ -> Lwt.return (Error Storage_error)
-                              | Ok () ->
-                                  Lwt.return
-                                    (Ok
-                                       {
-                                         removed_id = connection_id;
-                                         removed_requester = requester;
-                                         removed_recipient = recipient;
-                                         removed_result = new_status;
-                                       })))
-                | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data))))
+                                    let opposite =
+                                      if acting_community_id = requester then
+                                        recipient
+                                      else requester
+                                    in
+                                    with_notifications
+                                      (module C)
+                                      ~rollback_to
+                                      ~kind:Notifications.Connection_removed
+                                      ~actor_user_id ~community_id:opposite
+                                      ~connection_id
+                                      (fun () ->
+                                        C.commit () >>= function
+                                        | Error _ ->
+                                            Lwt.return (Error Storage_error)
+                                        | Ok () ->
+                                            Lwt.return
+                                              (Ok
+                                                 {
+                                                   removed_id = connection_id;
+                                                   removed_requester = requester;
+                                                   removed_recipient = recipient;
+                                                   removed_result = new_status;
+                                                 })))
+                          | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data)))
+        )

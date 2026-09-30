@@ -8,23 +8,31 @@
    login_session_replacement suite. *)
 
 let case name f = Alcotest.test_case name `Quick f
-
 let ( let* ) = Lwt.bind
 
 let mk_recent ?(id = 1) ?(username = "alice") ?(email = "alice@example.com")
     ?(created_at = "2026-01-01 00:00:00") ?(is_admin = false)
     ?(is_banned = false) ?(post_count = 0) ?(comment_count = 0)
     ?(message_count = 0) () : Earde.Admin_store.admin_recent_user =
-  { id; username; email; created_at; is_admin; is_banned; post_count;
-    comment_count; message_count }
+  {
+    id;
+    username;
+    email;
+    created_at;
+    is_admin;
+    is_banned;
+    post_count;
+    comment_count;
+    message_count;
+  }
 
-let mk_pending ?(id = 1) ?(username = "penny")
-    ?(email = "penny@example.com") ?(created_at = "2026-01-01 00:00:00")
-    ?(expires_at = "2026-01-02 00:00:00") ?ip_address () :
-    Earde.Admin_store.pending_signup_row =
+let mk_pending ?(id = 1) ?(username = "penny") ?(email = "penny@example.com")
+    ?(created_at = "2026-01-01 00:00:00") ?(expires_at = "2026-01-02 00:00:00")
+    ?ip_address () : Earde.Admin_store.pending_signup_row =
   { id; username; email; created_at; expires_at; ip_address }
 
-let mk_banned ~id ~username ~email : Earde.User_store.user = { id; username; email }
+let mk_banned ~id ~username ~email : Earde.User_store.user =
+  { id; username; email }
 
 (* Renders the real page through real session middleware (the unban forms
    embed a CSRF tag); the session carries the admin identity the topbar
@@ -55,11 +63,14 @@ let wrapper_case =
       Html_assert.must page "<body class='launch-global-admin'>";
       Html_assert.must page "<title>Admin Dashboard - Earde</title>";
       Html_assert.must page "<meta name='robots' content='noindex'>";
-      Alcotest.(check int) "exactly one earde.css" 1
+      Alcotest.(check int)
+        "exactly one earde.css" 1
         (Html_assert.occurrences page "href='/static/css/earde.css'");
-      Alcotest.(check int) "exactly one mobile-gate.css" 1
+      Alcotest.(check int)
+        "exactly one mobile-gate.css" 1
         (Html_assert.occurrences page "mobile-gate.css");
-      Alcotest.(check int) "exactly two stylesheets" 2
+      Alcotest.(check int)
+        "exactly two stylesheets" 2
         (Html_assert.occurrences page "<link rel='stylesheet'");
       Html_assert.must_not page "tailwind";
       Html_assert.must_not page "fonts.googleapis";
@@ -72,14 +83,18 @@ let wrapper_case =
       (* No count fetch and no badge: the badge is server-rendered from
          the request's unread count, and this document is rendered without
          one. One shared behavior script (one confirmModal definition). *)
-      Alcotest.(check int) "no notification fetch" 0
+      Alcotest.(check int)
+        "no notification fetch" 0
         (Html_assert.occurrences page "fetch('/api/unread-notifs')");
-      Alcotest.(check int) "no notif badge" 0
+      Alcotest.(check int)
+        "no notif badge" 0
         (Html_assert.occurrences page "id='notif-badge'");
-      Alcotest.(check int) "one confirmModal definition" 1
+      Alcotest.(check int)
+        "one confirmModal definition" 1
         (Html_assert.occurrences page "function confirmModal");
       (* Admin session: the user menu links back to /admin exactly once. *)
-      Alcotest.(check int) "one /admin menu link" 1
+      Alcotest.(check int)
+        "one /admin menu link" 1
         (Html_assert.occurrences page "href='/admin'"))
 
 let empty_states_case =
@@ -89,8 +104,10 @@ let empty_states_case =
       Html_assert.must page "No active pending signups.";
       Html_assert.must page "No users are currently globally banned.";
       (* All three data tables stay replay-masked. *)
-      Alcotest.(check int) "three masked tables" 3
-        (Html_assert.occurrences page "<table class='admin-table ph-no-capture'>"))
+      Alcotest.(check int)
+        "three masked tables" 3
+        (Html_assert.occurrences page
+           "<table class='admin-table ph-no-capture'>"))
 
 (* The one action form on the dashboard: POST /admin/unban/user/:id with a
    framework CSRF field and the existing confirm hook — byte contract. *)
@@ -99,27 +116,35 @@ let unban_form_case =
       let page =
         render
           ~banned_users:
-            [ mk_banned ~id:41 ~username:"marge" ~email:"marge@example.com"
-            ; mk_banned ~id:42 ~username:"o'brien"
-                ~email:"obrien@example.com"
-            ] ()
+            [
+              mk_banned ~id:41 ~username:"marge" ~email:"marge@example.com";
+              mk_banned ~id:42 ~username:"o'brien" ~email:"obrien@example.com";
+            ]
+          ()
       in
       Html_assert.must page
-        "<form class='admin-act-form' action='/admin/unban/user/41' method='POST' data-confirm='Lift global ban on u/marge?' onsubmit=\"confirmModal(event, this.dataset.confirm)\">";
+        "<form class='admin-act-form' action='/admin/unban/user/41' \
+         method='POST' data-confirm='Lift global ban on u/marge?' \
+         onsubmit=\"confirmModal(event, this.dataset.confirm)\">";
       (* The username travels only in the data attribute, escaped as
          attribute text; the hook's script source is the same constant for
          every user, so no name can reach a JavaScript literal. *)
       Html_assert.must page
-        "<form class='admin-act-form' action='/admin/unban/user/42' method='POST' data-confirm='Lift global ban on u/o&#39;brien?' onsubmit=\"confirmModal(event, this.dataset.confirm)\">";
-      Alcotest.(check int) "exactly two unban forms" 2
+        "<form class='admin-act-form' action='/admin/unban/user/42' \
+         method='POST' data-confirm='Lift global ban on u/o&#39;brien?' \
+         onsubmit=\"confirmModal(event, this.dataset.confirm)\">";
+      Alcotest.(check int)
+        "exactly two unban forms" 2
         (Html_assert.occurrences page "action='/admin/unban/user/");
-      Alcotest.(check int) "one Unban button per form" 2
+      Alcotest.(check int)
+        "one Unban button per form" 2
         (Html_assert.occurrences page
            "<button type='submit' class='admin-btn-unban'>Unban</button>");
       (* CSRF census: the unban forms are the only token-carrying forms on
          the page (search is GET; the menu logout form has never carried
          one). *)
-      Alcotest.(check int) "exactly two CSRF fields" 2
+      Alcotest.(check int)
+        "exactly two CSRF fields" 2
         (List.length
            (List.filter Html_assert.is_csrf_input (Html_assert.input_tags page))))
 
@@ -132,7 +157,8 @@ let escaping_case =
         render
           ~recent_users:[ mk_recent ~id:9 ~username:u ~email:e () ]
           ~pending:[ mk_pending ~id:5 ~username:u ~email:e () ]
-          ~banned_users:[ mk_banned ~id:7 ~username:u ~email:e ] ()
+          ~banned_users:[ mk_banned ~id:7 ~username:u ~email:e ]
+          ()
       in
       Html_assert.must_not page "ban<script>me";
       Html_assert.must_not page "evil&<x>";
@@ -142,7 +168,8 @@ let escaping_case =
       Html_assert.must page "href='/u/ban&lt;script&gt;me'";
       (* The recent-users table shows no email column — the address must
          appear exactly twice (pending + banned). *)
-      Alcotest.(check int) "email in pending and banned only" 2
+      Alcotest.(check int)
+        "email in pending and banned only" 2
         (Html_assert.occurrences page "evil&amp;&lt;x&gt;&quot;@qa"))
 
 (* Real config/status values render; no invented metrics appear. *)
@@ -161,9 +188,12 @@ let status_ledger_case =
       Html_assert.must page2 "admin-stat-val--ok'>configured")
 
 let suite =
-  [ wrapper_case; empty_states_case; unban_form_case; escaping_case;
-    status_ledger_case ]
-
-let suites =
-  [ ("admin_launch_page", suite)
+  [
+    wrapper_case;
+    empty_states_case;
+    unban_form_case;
+    escaping_case;
+    status_ledger_case;
   ]
+
+let suites = [ ("admin_launch_page", suite) ]

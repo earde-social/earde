@@ -70,20 +70,21 @@ let gou_single label key uri =
   | _ -> Alcotest.failf "%s: expected exactly one %s value" label key
 
 let gou_authorization_keys =
-  [ "client_id"; "redirect_uri"; "state"; "code_challenge";
-    "code_challenge_method" ]
+  [
+    "client_id";
+    "redirect_uri";
+    "state";
+    "code_challenge";
+    "code_challenge_method";
+  ]
 
 let gsd_binding_hash data =
   GOC.session_binding_hash_to_string (GSD.session_binding_hash data)
 
 let gsd_verifier data = GPK.verifier_to_string (GSD.verifier data)
-
 let gsd_challenge data = GPK.challenge_to_string (GSD.code_challenge data)
-
 let gsd_cookie_prefix = "earde.github_onboarding.v1."
-
 let cookie_secret = "earde-test-secret-github-onboarding-cookie"
-
 let gck_https_config () = gac_ok_exn "https cookie config" (gac_of_values ())
 
 (* Test-only browser simulation: the Cookie header a browser would send
@@ -135,15 +136,13 @@ let gck_parse_set_cookie header =
       let attributes =
         List.map
           (fun attribute ->
-            let attribute =
-              String.lowercase_ascii (String.trim attribute)
-            in
+            let attribute = String.lowercase_ascii (String.trim attribute) in
             match String.index_opt attribute '=' with
             | None -> (attribute, "")
             | Some i ->
                 ( String.sub attribute 0 i,
-                  String.sub attribute (i + 1)
-                    (String.length attribute - i - 1) ))
+                  String.sub attribute (i + 1) (String.length attribute - i - 1)
+                ))
           attributes
       in
       (name, value, attributes)
@@ -159,7 +158,6 @@ let gck_stored label config state data =
   gck_single_set_cookie label (gck_store_headers config state data)
 
 let gte_config () = gac_ok_exn "token exchange config" (gac_of_values ())
-
 let gte_client_secret = "gte+SECRET/fixture=42"
 
 let gte_credentials () =
@@ -168,7 +166,6 @@ let gte_credentials () =
   | Error _ -> Alcotest.fail "client secret fixture rejected"
 
 let gte_verifier_string = goc_fixture 'W'
-
 let gte_verifier () = gpk_verifier_exn gte_verifier_string
 
 (* Reserved punctuation on purpose: byte preservation must survive form
@@ -237,8 +234,7 @@ let gui_verified_exn label outcome =
   match outcome with
   | Ok verified -> verified
   | Error e ->
-      Alcotest.failf "%s: verification failed with %s" label
-        (gui_show_error e)
+      Alcotest.failf "%s: verification failed with %s" label (gui_show_error e)
 
 (* [count] sequential filler installation IDs starting at [from]. *)
 let gui_ids ~from count =
@@ -268,8 +264,7 @@ let gui_entry_page entry_json =
 let gui_raw_entry ?(id = "424242")
     ?(account = {|{"id":424243,"login":"owner-424242"}|})
     ?(target = {|"Organization"|}) () =
-  Printf.sprintf {|{"id":%s,"account":%s,"target_type":%s}|} id account
-    target
+  Printf.sprintf {|{"id":%s,"account":%s,"target_type":%s}|} id account target
 
 let gui_page_of ~total ids = Ok (200, gui_body ~total ids)
 
@@ -280,7 +275,6 @@ let gui_requested_page label (uri, _) =
   | None -> Alcotest.failf "%s: request has no page parameter" label
 
 let gur_account_id = 9099L
-
 let gur_login = "earde-owner"
 
 (* Fake transport answering scripted responses in order; every request's
@@ -320,7 +314,6 @@ let gur_repo ?(owner_id = gur_account_id) ?(owner_login = gur_login)
 (* Deliberately distinctive non-public fixture strings, asserted only
    through boolean containment so they can never reach test output. *)
 let gur_private_name = "secret-repo-fixture"
-
 let gur_private_description = "SECRET-PRIVATE-DESCRIPTION-FIXTURE"
 
 let gur_body ~total entries =

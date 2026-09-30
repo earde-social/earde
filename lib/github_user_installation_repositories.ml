@@ -66,7 +66,10 @@ let page_uri ~installation_id page =
     ~path:
       (Printf.sprintf "/user/installations/%Ld/repositories" installation_id)
     ~query:
-      [ ("per_page", [ string_of_int per_page ]); ("page", [ string_of_int page ]) ]
+      [
+        ("per_page", [ string_of_int per_page ]);
+        ("page", [ string_of_int page ]);
+      ]
     ()
 
 (* The token rides only in the Authorization header, never in the URI. *)
@@ -83,8 +86,15 @@ let recognized_page_keys = [ "total_count"; "repositories" ]
 
 let recognized_repository_keys =
   [
-    "id"; "name"; "full_name"; "owner"; "private"; "visibility";
-    "description"; "default_branch"; "archived";
+    "id";
+    "name";
+    "full_name";
+    "owner";
+    "private";
+    "visibility";
+    "description";
+    "default_branch";
+    "archived";
   ]
 
 let occurrences fields key =
@@ -167,8 +177,7 @@ let parse_owner ~account_id = function
         | Some (`String login) when valid_segment login -> Some login
         | _ -> None
       in
-      if Int64.equal owner_id account_id then Some (owner_id, login)
-      else None
+      if Int64.equal owner_id account_id then Some (owner_id, login) else None
   | _ -> None
 
 (* A structurally valid entry plus whether it may be returned. Non-public
@@ -260,21 +269,18 @@ let rec validated_entries ~account_id validated = function
   | [] -> Some (List.rev validated)
   | entry :: rest -> (
       match parse_repository ~account_id entry with
-      | Some parsed ->
-          validated_entries ~account_id (parsed :: validated) rest
+      | Some parsed -> validated_entries ~account_id (parsed :: validated) rest
       | None -> None)
 
 let parse_page ~account_id body =
   match Yojson.Safe.from_string body with
   | exception _ -> Error Invalid_response
   | `Assoc fields -> (
-      (* Yojson preserves duplicate keys in `Assoc`; a duplicated recognized
+      if
+        (* Yojson preserves duplicate keys in `Assoc`; a duplicated recognized
          key makes the response ambiguous, so it is rejected before any
          field is interpreted. Unknown top-level keys stay ignored. *)
-      if
-        List.exists
-          (fun key -> occurrences fields key > 1)
-          recognized_page_keys
+        List.exists (fun key -> occurrences fields key > 1) recognized_page_keys
       then Error Invalid_response
       else
         match
@@ -343,10 +349,10 @@ let list_public ~transport:(module Transport : TRANSPORT) ~token_set
                        total_count
                      >= 0
                 in
-                if complete then (
+                if complete then
                   match List.rev publics with
                   | [] -> Lwt.return (Error No_public_repositories)
-                  | set -> Lwt.return (Ok set))
+                  | set -> Lwt.return (Ok set)
                 else if page < max_pages then fetch (page + 1) seen publics
                 else
                   (* The scan stopped because of our own page cap, not

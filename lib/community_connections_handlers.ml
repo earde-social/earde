@@ -50,7 +50,8 @@ let session_global_admin request =
    never cacheable, and never leaking onward as a cross-origin Referer. The
    pages stay noindex from the page module itself. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -59,7 +60,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -76,8 +78,8 @@ let login_redirect () = clean_redirect "/login"
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 let bad_request_page request =
   Dream.respond ~status:`Bad_Request ~headers:page_headers
@@ -170,12 +172,16 @@ let load_launch_shell request ~user_id ~canonical_slug =
       match%lwt Community_store.get_community_by_slug db canonical_slug with
       | Ok (Some community) ->
           let%lwt channels =
-            match%lwt Channel_store.get_channels_by_community db community.id with
+            match%lwt
+              Channel_store.get_channels_by_community db community.id
+            with
             | Ok channels -> Lwt.return channels
             | Error _ -> Lwt.return []
           in
           let%lwt sections =
-            match%lwt Section_store.get_sections_by_community db community.id with
+            match%lwt
+              Section_store.get_sections_by_community db community.id
+            with
             | Ok sections -> Lwt.return sections
             | Error _ -> Lwt.return []
           in
@@ -185,8 +191,8 @@ let load_launch_shell request ~user_id ~canonical_slug =
             | Error _ -> Lwt.return []
           in
           let sidebar =
-            Community_pages.launch_knowledge_sidebar ~community ~channels ~sections
-              ~settings_active:true ~show_visibility_note:false
+            Community_pages.launch_knowledge_sidebar ~community ~channels
+              ~sections ~settings_active:true ~show_visibility_note:false
               ~can_manage:true ()
           in
           Lwt.return (Some (community, rail_communities, sidebar))
@@ -222,8 +228,8 @@ let respond_management request ~user_id ~community_slug ~feedback ~status =
           ~canonical_slug:(Read.view_community_slug view)
       in
       Dream.respond ~status ~headers:page_headers
-        (Pages_ccn.management_page ?user:(session_user request) ~request
-           ?shell ~state:(state_of_view view) ~feedback ()))
+        (Pages_ccn.management_page ?user:(session_user request) ~request ?shell
+           ~state:(state_of_view view) ~feedback ()))
 
 (* --- Shared session gate ---
 
@@ -271,9 +277,9 @@ let make_connections_search_handler request =
                    the search surface says so rather than offering targets it
                    could never use. *)
                 Dream.respond ~status:`Forbidden ~headers:page_headers
-                  (Pages_ccn.target_search_page ?user:(session_user request) ~request
-                     ?shell ~community:page_community ~query:"" ~results:[]
-                     ~searched:false
+                  (Pages_ccn.target_search_page ?user:(session_user request)
+                     ~request ?shell ~community:page_community ~query:""
+                     ~results:[] ~searched:false
                      ~feedback:(Some Pages_ccn.Source_ineligible) ())
               else
                 let query =
@@ -292,12 +298,15 @@ let make_connections_search_handler request =
                     let%lwt resolved =
                       Dream.sql request (fun db ->
                           Read.resolve_target db
-                            ~community_id:(Read.view_community_id view) ~slug)
+                            ~community_id:(Read.view_community_id view)
+                            ~slug)
                     in
                     match resolved with
                     | Error _ -> server_error_page request
-                    | Ok Read.Unavailable -> refused Pages_ccn.Target_unavailable
-                    | Ok Read.Already_active -> refused Pages_ccn.Already_connected
+                    | Ok Read.Unavailable ->
+                        refused Pages_ccn.Target_unavailable
+                    | Ok Read.Already_active ->
+                        refused Pages_ccn.Already_connected
                     | Ok (Read.Connectable t) ->
                         let note =
                           match Dream.query request "note" with
@@ -451,7 +460,7 @@ let make_connection_request_handler request =
                                 ~connection)
                         in
                         request_result request ~user_id ~community_slug result))
-            )
+          )
       | _ -> bad_request_page request)
 
 (* --- Shared subject binding for the three id-addressed mutations ---
@@ -477,8 +486,8 @@ let with_bound_connection request ~fields ~view k =
           match loaded with
           | Error Rows.Invalid_connection_id -> not_found_page request
           | Error
-              (Rows.Invalid_community_id | Rows.Inconsistent_data
-              | Rows.Storage_error) ->
+              ( Rows.Invalid_community_id | Rows.Inconsistent_data
+              | Rows.Storage_error ) ->
               server_error_page request
           | Ok None -> not_found_page request
           | Ok (Some row) ->
@@ -557,8 +566,8 @@ let removal_result request ~user_id ~community_slug = function
       | Store.Invalid_community_id | Store.Invalid_connection
       | Store.Community_unavailable | Store.Requester_ineligible
       | Store.Recipient_ineligible | Store.Active_connection_exists
-      | Store.Review_unavailable | Store.Inconsistent_data
-      | Store.Storage_error ) ->
+      | Store.Review_unavailable | Store.Inconsistent_data | Store.Storage_error
+        ) ->
       server_error_page request
 
 let make_connection_removal_handler request =

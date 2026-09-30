@@ -9,28 +9,21 @@ let getenv_nonempty name =
 
 let base64url_of_string value =
   let encoded = Base64.encode_exn value in
-  encoded
-  |> String.map (function
-       | '+' -> '-'
-       | '/' -> '_'
-       | c -> c)
+  encoded |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
   |> fun s ->
   let rec strip_padding s =
     let len = String.length s in
     if len > 0 && s.[len - 1] = '=' then
       strip_padding (String.sub s 0 (len - 1))
-    else
-      s
+    else s
   in
   strip_padding s
 
 let hmac_sha256_base64url ~secret value =
   Digestif.SHA256.hmac_string ~key:secret value
-  |> Digestif.SHA256.to_raw_string
-  |> base64url_of_string
+  |> Digestif.SHA256.to_raw_string |> base64url_of_string
 
-let unix_now () =
-  Unix.time () |> int_of_float
+let unix_now () = Unix.time () |> int_of_float
 
 (* shared_cursors is a capability claim, not identity: the gateway trusts it
    only because it rides the HMAC signature, and callers must derive it
@@ -39,20 +32,17 @@ let unix_now () =
 let payload_json ~user_id ~username ~topic ~shared_cursors ~ttl_seconds =
   let exp = unix_now () + ttl_seconds in
   `Assoc
-    [ ("v", `Int 1)
-    ; ("user_id", `Int user_id)
-    ; ("username", `String username)
-    ; ("topic", `String topic)
-    ; ("exp", `Int exp)
-    ; ("shared_cursors", `Bool shared_cursors)
+    [
+      ("v", `Int 1);
+      ("user_id", `Int user_id);
+      ("username", `String username);
+      ("topic", `String topic);
+      ("exp", `Int exp);
+      ("shared_cursors", `Bool shared_cursors);
     ]
 
 let sign ~secret payload_json =
-  let payload =
-    payload_json
-    |> Yojson.Safe.to_string
-    |> base64url_of_string
-  in
+  let payload = payload_json |> Yojson.Safe.to_string |> base64url_of_string in
   let signature = hmac_sha256_base64url ~secret payload in
   payload ^ "." ^ signature
 
@@ -66,8 +56,7 @@ let create_for_topic ~user_id ~username ~topic ~shared_cursors =
   | Some secret ->
       payload_json ~user_id ~username ~topic ~shared_cursors
         ~ttl_seconds:default_ttl_seconds
-      |> sign ~secret
-      |> Option.some
+      |> sign ~secret |> Option.some
 
 (* Decode a token's (transparent, signed) payload part back to JSON. Used by
    tests to assert topic binding and expiry without a second signing path. *)

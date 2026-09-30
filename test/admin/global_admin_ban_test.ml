@@ -16,16 +16,17 @@ let status_of response = Dream.status_to_int (Dream.status response)
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM notifications WHERE user_id IN \
-       (SELECT id FROM users WHERE username LIKE 'gab_%')"
-    ; "DELETE FROM users WHERE username LIKE 'gab_%'"
+    [
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'gab_%')";
+      "DELETE FROM users WHERE username LIKE 'gab_%'";
     ]
 
 let q_insert_user =
   (Caqti_type.(t3 string bool bool) ->! Caqti_type.int)
-    "INSERT INTO users \
-       (username, email, password_hash, is_email_verified, is_admin, is_banned) \
-     VALUES ($1, $1 || '@test.invalid', 'x', TRUE, $2, $3) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified, \
+     is_admin, is_banned) VALUES ($1, $1 || '@test.invalid', 'x', TRUE, $2, \
+     $3) RETURNING id"
 
 let q_set_banned =
   (Caqti_type.(t2 bool int) ->. Caqti_type.unit)
@@ -41,8 +42,8 @@ let q_notif_count =
 
 let q_mod_action_notifs =
   (Caqti_type.int ->! Caqti_type.int)
-    "SELECT COUNT(*) FROM notifications \
-     WHERE user_id = $1 AND notif_type = 'mod_action'"
+    "SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND notif_type = \
+     'mod_action'"
 
 let or_fail label = function
   | Ok v -> Lwt.return v
@@ -68,11 +69,10 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
-let insert_user ?(admin = false) ?(banned = false) (module C : Caqti_lwt.CONNECTION)
-    username =
+let insert_user ?(admin = false) ?(banned = false)
+    (module C : Caqti_lwt.CONNECTION) username =
   let* id = C.find q_insert_user (username, admin, banned) in
   or_fail username id
 
@@ -96,7 +96,6 @@ let mod_action_notifs (module C : Caqti_lwt.CONNECTION) id =
    machinery. The identity middleware plants the session the way login
    would, once per fresh cookie. *)
 let shared_identity : (int * string * bool) option ref = ref None
-
 let shared_pipeline = ref None
 
 let identity_middleware handler request =
@@ -117,17 +116,19 @@ let identity_middleware handler request =
           handler request)
 
 let build_pipeline ~url =
-  Dream.sql_pool ~size:2 url @@ Dream.set_secret Github_fixture.cookie_secret
+  Dream.sql_pool ~size:2 url
+  @@ Dream.set_secret Github_fixture.cookie_secret
   @@ Dream.memory_sessions @@ identity_middleware
   @@ Dream.router
-       [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
+       [
+         Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
          Dream.get "/mint-expired" (fun req ->
              Dream.respond (Dream.csrf_token ~valid_for:(-60.) req));
          Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler;
          Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler;
          Dream.post "/admin/ban/user/:id" Earde.Admin_handlers.ban_user_handler;
          Dream.post "/admin/unban/user/:id"
-           Earde.Admin_handlers.unban_user_global_handler
+           Earde.Admin_handlers.unban_user_global_handler;
        ]
 
 let pipeline_for ~url =
@@ -139,7 +140,6 @@ let pipeline_for ~url =
       pipeline
 
 let as_user identity = shared_identity := Some identity
-
 let as_anonymous () = shared_identity := None
 
 (* Every request carries the Host header a real browser sends — the
@@ -163,7 +163,7 @@ let do_post ?cookie ?referer ?(omit_token = false) ~url ~target ~token () =
   let headers =
     [ ("Host", host); ("Content-Type", "application/x-www-form-urlencoded") ]
     @ (match cookie with Some c -> [ ("Cookie", c) ] | None -> [])
-    @ (match referer with Some r -> [ ("Referer", r) ] | None -> [])
+    @ match referer with Some r -> [ ("Referer", r) ] | None -> []
   in
   let body =
     if omit_token then "" else Http_fixture.form_body [ ("dream.csrf", token) ]
@@ -188,65 +188,80 @@ let mint_expired label ~url ~cookie =
   Lwt.return body
 
 let ban_target id = Printf.sprintf "/admin/ban/user/%d" id
-
 let unban_target id = Printf.sprintf "/admin/unban/user/%d" id
 
 let check_redirect label expected response =
   Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some expected)
     (Dream.header response "Location")
 
 let check_form_error label response body =
   Alcotest.(check int) (label ^ ": 400") 400 (status_of response);
-  Alcotest.(check bool) (label ^ ": form-error copy") true
+  Alcotest.(check bool)
+    (label ^ ": form-error copy")
+    true
     (Html_assert.contains body "Invalid form submission.");
-  Alcotest.(check (option string)) (label ^ ": no redirect") None
+  Alcotest.(check (option string))
+    (label ^ ": no redirect") None
     (Dream.header response "Location")
 
 (* --- 13. the rendered forms are the contract the browser submits --- *)
 let form_contract_case =
-  db_case "profile ban form and /admin unban form keep route, method, CSRF \
-           field and confirm hook" (fun ~url conn ->
+  db_case
+    "profile ban form and /admin unban form keep route, method, CSRF field and \
+     confirm hook" (fun ~url conn ->
       let* admin = insert_user ~admin:true conn "gab_admin" in
       let* target = insert_user conn "gab_target" in
       let* banned = insert_user ~banned:true conn "gab_banned" in
       let* cookie, _ = open_session "forms" ~url (admin, "gab_admin", true) in
       let* response, body = do_get ~url ~cookie ~target:"/u/gab_target" () in
       Alcotest.(check int) "profile 200" 200 (status_of response);
-      Alcotest.(check bool) "ban form action" true
+      Alcotest.(check bool)
+        "ban form action" true
         (Html_assert.contains body
            (Printf.sprintf "<form action='/admin/ban/user/%d' method='POST'"
               target));
-      Alcotest.(check bool) "ban confirm hook" true
+      Alcotest.(check bool)
+        "ban confirm hook" true
         (Html_assert.contains body
-           "data-confirm='Permanently ban u/gab_target? They will be blocked from logging in and posting.' onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
-      let* _ = Lwt.return (Http_fixture.csrf_of_page "profile ban form CSRF" body) in
+           "data-confirm='Permanently ban u/gab_target? They will be blocked \
+            from logging in and posting.' onsubmit=\"confirmModal(event, \
+            this.dataset.confirm)\"");
+      let* _ =
+        Lwt.return (Http_fixture.csrf_of_page "profile ban form CSRF" body)
+      in
       let* response, body = do_get ~url ~cookie ~target:"/admin" () in
       Alcotest.(check int) "/admin 200" 200 (status_of response);
-      Alcotest.(check bool) "unban form action" true
+      Alcotest.(check bool)
+        "unban form action" true
         (Html_assert.contains body
            (Printf.sprintf
               "<form class='admin-act-form' action='/admin/unban/user/%d' \
                method='POST'"
               banned));
-      Alcotest.(check bool) "unban confirm hook" true
+      Alcotest.(check bool)
+        "unban confirm hook" true
         (Html_assert.contains body
-           "data-confirm='Lift global ban on u/gab_banned?' onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
-      let* _ = Lwt.return (Http_fixture.csrf_of_page "/admin unban form CSRF" body) in
+           "data-confirm='Lift global ban on u/gab_banned?' \
+            onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
+      let* _ =
+        Lwt.return (Http_fixture.csrf_of_page "/admin unban form CSRF" body)
+      in
       Lwt.return_unit)
 
 (* --- 1, 2, 14, 15: the happy paths, returning to the real surfaces --- *)
 let happy_path_case =
-  db_case "valid same-session token bans and unbans; absolute same-origin \
-           Referers return to the profile and /admin" (fun ~url conn ->
+  db_case
+    "valid same-session token bans and unbans; absolute same-origin Referers \
+     return to the profile and /admin" (fun ~url conn ->
       let* admin = insert_user ~admin:true conn "gab_admin" in
       let* target = insert_user conn "gab_target" in
       let* cookie, token =
         open_session "happy" ~url (admin, "gab_admin", true)
       in
       let* response, _ =
-        do_post ~url ~cookie ~token
-          ~referer:"https://earde.com/u/gab_target"
+        do_post ~url ~cookie ~token ~referer:"https://earde.com/u/gab_target"
           ~target:(ban_target target) ()
       in
       check_redirect "ban" "/u/gab_target" response;
@@ -270,9 +285,7 @@ let happy_path_case =
 let rejected_tokens_case label ~action ~initially_banned =
   db_case label (fun ~url conn ->
       let* admin = insert_user ~admin:true conn "gab_admin" in
-      let* target =
-        insert_user ~banned:initially_banned conn "gab_target"
-      in
+      let* target = insert_user ~banned:initially_banned conn "gab_target" in
       let* cookie, live =
         open_session "rejects" ~url (admin, "gab_admin", true)
       in
@@ -285,9 +298,11 @@ let rejected_tokens_case label ~action ~initially_banned =
         if action = `Ban then ban_target target else unban_target target
       in
       let attempts =
-        [ ("missing token", None, true); ("forged token", Some "not-a-token", false);
+        [
+          ("missing token", None, true);
+          ("forged token", Some "not-a-token", false);
           ("stale token", Some expired, false);
-          ("foreign-session token", Some foreign, false)
+          ("foreign-session token", Some foreign, false);
         ]
       in
       let* () =
@@ -300,7 +315,8 @@ let rejected_tokens_case label ~action ~initially_banned =
             in
             check_form_error name response body;
             let* banned = is_banned conn target in
-            Alcotest.(check bool) (name ^ ": ban state untouched")
+            Alcotest.(check bool)
+              (name ^ ": ban state untouched")
               initially_banned banned;
             let* notifs = notif_count conn target in
             Alcotest.(check int) (name ^ ": no notification") 0 notifs;
@@ -320,8 +336,8 @@ let rejected_tokens_case label ~action ~initially_banned =
 
 let ban_rejects_case =
   rejected_tokens_case
-    "ban: missing, forged, stale and foreign-session tokens are rejected \
-     with zero side effects"
+    "ban: missing, forged, stale and foreign-session tokens are rejected with \
+     zero side effects"
     ~action:`Ban ~initially_banned:false
 
 let unban_rejects_case =
@@ -332,34 +348,35 @@ let unban_rejects_case =
 
 (* --- 10, 11: authorization comes first and is not bought by a token --- *)
 let authorization_case =
-  db_case "non-admin with a valid token and anonymous POSTs keep the \
-           existing denial; no mutation" (fun ~url conn ->
+  db_case
+    "non-admin with a valid token and anonymous POSTs keep the existing \
+     denial; no mutation" (fun ~url conn ->
       let* _admin = insert_user ~admin:true conn "gab_admin" in
       let* peon = insert_user conn "gab_peon" in
       let* target = insert_user conn "gab_target" in
       let* banned_user = insert_user ~banned:true conn "gab_banned" in
-      let* cookie, token =
-        open_session "peon" ~url (peon, "gab_peon", false)
-      in
+      let* cookie, token = open_session "peon" ~url (peon, "gab_peon", false) in
       let* response, body =
         do_post ~url ~cookie ~token ~target:(ban_target target) ()
       in
       Alcotest.(check int) "non-admin ban: 200 page" 200 (status_of response);
-      Alcotest.(check bool) "non-admin ban: denial copy" true
+      Alcotest.(check bool)
+        "non-admin ban: denial copy" true
         (Html_assert.contains body "You are not an Admin.");
       let* response, body =
         do_post ~url ~cookie ~token ~target:(unban_target banned_user) ()
       in
-      Alcotest.(check int) "non-admin unban: 200 page" 200
-        (status_of response);
-      Alcotest.(check bool) "non-admin unban: denial copy" true
+      Alcotest.(check int) "non-admin unban: 200 page" 200 (status_of response);
+      Alcotest.(check bool)
+        "non-admin unban: denial copy" true
         (Html_assert.contains body "You are not an Admin.");
       as_anonymous ();
       let* response, body =
         do_post ~url ~token:"" ~omit_token:true ~target:(ban_target target) ()
       in
       Alcotest.(check int) "anonymous ban: 200 page" 200 (status_of response);
-      Alcotest.(check bool) "anonymous ban: denial copy" true
+      Alcotest.(check bool)
+        "anonymous ban: denial copy" true
         (Html_assert.contains body "You are not an Admin.");
       let* banned = is_banned conn target in
       Alcotest.(check bool) "target never banned" false banned;
@@ -371,8 +388,9 @@ let authorization_case =
 
 (* --- 12: target resolution stays authoritative and post-CSRF --- *)
 let unknown_target_case =
-  db_case "unknown and malformed target ids keep the existing post-CSRF \
-           behavior" (fun ~url conn ->
+  db_case
+    "unknown and malformed target ids keep the existing post-CSRF behavior"
+    (fun ~url conn ->
       let* admin = insert_user ~admin:true conn "gab_admin" in
       let* cookie, token =
         open_session "unknown" ~url (admin, "gab_admin", true)
@@ -393,15 +411,17 @@ let unknown_target_case =
         do_post ~url ~cookie ~token ~target:"/admin/ban/user/abc" ()
       in
       Alcotest.(check int) "malformed id: 400" 400 (status_of response);
-      Alcotest.(check bool) "malformed id: copy" true
+      Alcotest.(check bool)
+        "malformed id: copy" true
         (Html_assert.contains body "Invalid user ID.");
       Lwt.return_unit)
 
 (* --- 16-21 + missing-Referer fallbacks, through the real handlers --- *)
 let redirect_grammar_case =
-  db_case "Referer handling: local and same-origin values return to their \
-           surface, hostile values fall back, no response ever leaves the \
-           origin" (fun ~url conn ->
+  db_case
+    "Referer handling: local and same-origin values return to their surface, \
+     hostile values fall back, no response ever leaves the origin"
+    (fun ~url conn ->
       let* admin = insert_user ~admin:true conn "gab_admin" in
       let* target = insert_user conn "gab_target" in
       let* cookie, token =
@@ -448,19 +468,26 @@ let redirect_grammar_case =
       in
       (match Dream.header response "Location" with
       | Some l ->
-          Alcotest.(check bool) "userinfo trick: local Location" true
-            (String.length l > 0 && l.[0] = '/'
+          Alcotest.(check bool)
+            "userinfo trick: local Location" true
+            (String.length l > 0
+            && l.[0] = '/'
             && not (String.length l >= 2 && l.[1] = '/'));
-          Alcotest.(check bool) "userinfo trick: no evil.example" false
+          Alcotest.(check bool)
+            "userinfo trick: no evil.example" false
             (Html_assert.contains l "evil.example")
       | None -> Alcotest.fail "userinfo trick: no redirect");
       Lwt.return_unit)
 
 let suite =
-  [ form_contract_case; happy_path_case; ban_rejects_case;
-    unban_rejects_case; authorization_case; unknown_target_case;
-    redirect_grammar_case ]
-
-let suites =
-  [ ("global_admin_ban_actions", suite)
+  [
+    form_contract_case;
+    happy_path_case;
+    ban_rejects_case;
+    unban_rejects_case;
+    authorization_case;
+    unknown_target_case;
+    redirect_grammar_case;
   ]
+
+let suites = [ ("global_admin_ban_actions", suite) ]

@@ -17,7 +17,6 @@ module GUI = Earde.Github_user_installations
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Store = Earde.Github_installation_store
 
 let error_str : Store.error -> string = function
@@ -30,7 +29,6 @@ let or_fail label = function
   | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
 
 let gis_access_fixture = "gis-access.TOKEN~1"
-
 let gis_refresh_fixture = "gis-refresh.TOKEN~2"
 
 let default_token_body =
@@ -55,13 +53,14 @@ let token_set_lwt body =
   in
   match outcome with
   | Ok tokens -> Lwt.return tokens
-  | Error e -> Alcotest.failf "token fixture: %s" (Github_fixture.gte_show_error e)
+  | Error e ->
+      Alcotest.failf "token fixture: %s" (Github_fixture.gte_show_error e)
 
 (* Abstract verified-installation fixture through the real verify against
    a one-page scripted listing. [target] is GitHub's installation-level
    target_type spelling: "User" or "Organization". *)
-let verified ?(token_body = default_token_body) ~installation_id
-    ~account_id ~login ~target () =
+let verified ?(token_body = default_token_body) ~installation_id ~account_id
+    ~login ~target () =
   let* token_set = token_set_lwt token_body in
   let body =
     Printf.sprintf
@@ -85,71 +84,75 @@ let verified ?(token_body = default_token_body) ~installation_id
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 935000001 AND 935000999"
-    ; "DELETE FROM users WHERE username IN ('ghinstall_a', 'ghinstall_b')"
+    [
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       935000001 AND 935000999";
+      "DELETE FROM users WHERE username IN ('ghinstall_a', 'ghinstall_b')";
     ]
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 (* A positive user id guaranteed absent from users, for the FK-failure
    case. *)
 let q_absent_user_id =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
 
 (* Everything persisted for one installation: identity, provenance,
    lifecycle, and the timestamp epochs — enough to pin both the inserted
    values and that an untouched row stayed byte-for-byte identical. *)
 let q_row =
-  (Caqti_type.(int64 ->! t2 (t4 int64 string string (option int))
-                           (t2 (t2 string bool) (t2 float float))))
-  "SELECT github_account_id, github_account_login, github_account_type,
-          connected_by_user_id, status, revoked_at IS NULL,
-          EXTRACT(EPOCH FROM created_at)::float8,
-          EXTRACT(EPOCH FROM updated_at)::float8
-   FROM github_installations WHERE github_installation_id = $1"
+  Caqti_type.(
+    int64
+    ->! t2
+          (t4 int64 string string (option int))
+          (t2 (t2 string bool) (t2 float float)))
+    "SELECT github_account_id, github_account_login, github_account_type,\n\
+    \          connected_by_user_id, status, revoked_at IS NULL,\n\
+    \          EXTRACT(EPOCH FROM created_at)::float8,\n\
+    \          EXTRACT(EPOCH FROM updated_at)::float8\n\
+    \   FROM github_installations WHERE github_installation_id = $1"
 
 let q_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM github_installations
-   WHERE github_installation_id = $1"
+    "SELECT COUNT(*) FROM github_installations\n\
+    \   WHERE github_installation_id = $1"
 
 let q_fixture_count =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM github_installations
-   WHERE github_installation_id BETWEEN 935000001 AND 935000999"
+    "SELECT COUNT(*) FROM github_installations\n\
+    \   WHERE github_installation_id BETWEEN 935000001 AND 935000999"
 
 let q_mark_inaccessible =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE github_installations SET status = 'inaccessible'
-   WHERE github_installation_id = $1"
+    "UPDATE github_installations SET status = 'inaccessible'\n\
+    \   WHERE github_installation_id = $1"
 
 let q_mark_revoked =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE github_installations
-   SET status = 'revoked', revoked_at = NOW()
-   WHERE github_installation_id = $1"
+    "UPDATE github_installations\n\
+    \   SET status = 'revoked', revoked_at = NOW()\n\
+    \   WHERE github_installation_id = $1"
 
 let q_revoked_at_epoch =
-  (Caqti_type.(int64 ->! option float))
-  "SELECT EXTRACT(EPOCH FROM revoked_at)::float8
-   FROM github_installations WHERE github_installation_id = $1"
+  Caqti_type.(int64 ->! option float)
+    "SELECT EXTRACT(EPOCH FROM revoked_at)::float8\n\
+    \   FROM github_installations WHERE github_installation_id = $1"
 
 (* All schema-facing values of one row rendered to a single text blob for
    the structural credential-absence check. *)
 let q_row_text =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT github_installation_id::text || '|' ||
-          github_account_id::text || '|' ||
-          github_account_login || '|' ||
-          github_account_type || '|' ||
-          status || '|' ||
-          COALESCE(connected_by_user_id::text, '')
-   FROM github_installations WHERE github_installation_id = $1"
+    "SELECT github_installation_id::text || '|' ||\n\
+    \          github_account_id::text || '|' ||\n\
+    \          github_account_login || '|' ||\n\
+    \          github_account_type || '|' ||\n\
+    \          status || '|' ||\n\
+    \          COALESCE(connected_by_user_id::text, '')\n\
+    \   FROM github_installations WHERE github_installation_id = $1"
 
 (* Each case gets a fresh connection and a clean fixture slate; cleanup
    runs again afterwards even when an assertion fails mid-way. *)
@@ -173,8 +176,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let insert_user conn username =
   let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -220,11 +222,13 @@ let check_same_row label
   Alcotest.(check int64) (label ^ ": account id") acct_b acct_a;
   Alcotest.(check string) (label ^ ": login") login_b login_a;
   Alcotest.(check string) (label ^ ": account type") type_b type_a;
-  Alcotest.(check (option int)) (label ^ ": connected user") connected_b
-    connected_a;
+  Alcotest.(check (option int))
+    (label ^ ": connected user")
+    connected_b connected_a;
   Alcotest.(check string) (label ^ ": status") status_b status_a;
-  Alcotest.(check bool) (label ^ ": revoked_at NULL-ness") revoked_null_b
-    revoked_null_a;
+  Alcotest.(check bool)
+    (label ^ ": revoked_at NULL-ness")
+    revoked_null_b revoked_null_a;
   Alcotest.(check (float 0.)) (label ^ ": created_at") created_b created_a;
   Alcotest.(check (float 0.)) (label ^ ": updated_at") updated_b updated_a
 
@@ -232,8 +236,7 @@ let fresh_insert_case =
   db_case "record: fresh insert persists both account types" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* uid = insert_user conn "ghinstall_a" in
-      let check ~installation_id ~account_id ~login ~target
-          ~expected_type =
+      let check ~installation_id ~account_id ~login ~target ~expected_type =
         let* v = verified ~installation_id ~account_id ~login ~target () in
         let* () = record_ok "record" conn ~user:uid v in
         let* n = count conn installation_id in
@@ -244,10 +247,10 @@ let fresh_insert_case =
         in
         Alcotest.(check int64) "account id" account_id acct;
         Alcotest.(check string) "login byte-for-byte" login stored_login;
-        Alcotest.(check string) "canonical lowercase account type"
-          expected_type stored_type;
-        Alcotest.(check (option int)) "connected user is the caller"
-          (Some uid) connected;
+        Alcotest.(check string)
+          "canonical lowercase account type" expected_type stored_type;
+        Alcotest.(check (option int))
+          "connected user is the caller" (Some uid) connected;
         Alcotest.(check string) "status" "active" status;
         Alcotest.(check bool) "revoked_at IS NULL" true revoked_null;
         Alcotest.(check bool) "created_at exists" true (created > 0.);
@@ -280,12 +283,11 @@ let invalid_user_case =
         | Error Store.Invalid_connected_by_user_id -> Lwt.return_unit
         | Error e ->
             Alcotest.failf
-              "user id %d: expected Invalid_connected_by_user_id, got %s"
-              uid (error_str e)
+              "user id %d: expected Invalid_connected_by_user_id, got %s" uid
+              (error_str e)
         | Ok () ->
             Alcotest.failf
-              "user id %d: expected Invalid_connected_by_user_id, got Ok"
-              uid
+              "user id %d: expected Invalid_connected_by_user_id, got Ok" uid
       in
       let* () = check_rejected 0 in
       let* () = check_rejected (-1) in
@@ -294,8 +296,7 @@ let invalid_user_case =
       Lwt.return_unit)
 
 let missing_user_case =
-  db_case "record: nonexistent user id is Storage_error, no row"
-    (fun conn ->
+  db_case "record: nonexistent user id is Storage_error, no row" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* ghost = C.find q_absent_user_id () in
       let* ghost = or_fail "absent user id" ghost in
@@ -306,8 +307,7 @@ let missing_user_case =
       let* r = record conn ~user:ghost v in
       (match r with
       | Error Store.Storage_error -> ()
-      | Error e ->
-          Alcotest.failf "expected Storage_error, got %s" (error_str e)
+      | Error e -> Alcotest.failf "expected Storage_error, got %s" (error_str e)
       | Ok () -> Alcotest.fail "expected Storage_error, got Ok");
       let* n = count conn 935000012L in
       Alcotest.(check int) "no row inserted" 0 n;
@@ -325,18 +325,15 @@ let idempotent_case =
       let* () = record_ok "retry" conn ~user:uid v in
       let* n = count conn 935000021L in
       Alcotest.(check int) "exactly one row" 1 n;
-      let* ( (acct, login, account_type, connected),
-             ((status, _), (created, _)) ) =
+      let* (acct, login, account_type, connected), ((status, _), (created, _)) =
         row conn 935000021L
       in
-      let (acct_b, login_b, type_b, connected_b), (_, (created_b, _)) =
-        first
-      in
+      let (acct_b, login_b, type_b, connected_b), (_, (created_b, _)) = first in
       Alcotest.(check string) "status remains active" "active" status;
-      Alcotest.(check (option int)) "ownership remains the original user"
-        connected_b connected;
-      Alcotest.(check (option int)) "owner is the fixture user" (Some uid)
-        connected;
+      Alcotest.(check (option int))
+        "ownership remains the original user" connected_b connected;
+      Alcotest.(check (option int))
+        "owner is the fixture user" (Some uid) connected;
       Alcotest.(check int64) "account id unchanged" acct_b acct;
       Alcotest.(check string) "login unchanged" login_b login;
       Alcotest.(check string) "account type unchanged" type_b account_type;
@@ -360,14 +357,12 @@ let login_refresh_case =
       let* () = record_ok "refresh" conn ~user:uid v2 in
       let* n = count conn 935000022L in
       Alcotest.(check int) "no second row" 1 n;
-      let* (acct, login, account_type, connected), _ =
-        row conn 935000022L
-      in
+      let* (acct, login, account_type, connected), _ = row conn 935000022L in
       Alcotest.(check string) "login updated exactly" "new-login" login;
       Alcotest.(check int64) "account id unchanged" 935100022L acct;
       Alcotest.(check string) "account type unchanged" "user" account_type;
-      Alcotest.(check (option int)) "connected user unchanged" (Some uid)
-        connected;
+      Alcotest.(check (option int))
+        "connected user unchanged" (Some uid) connected;
       Lwt.return_unit)
 
 let reconnecting_user_case =
@@ -384,8 +379,8 @@ let reconnecting_user_case =
       let* n = count conn 935000023L in
       Alcotest.(check int) "no second row" 1 n;
       let* (_, _, _, connected), _ = row conn 935000023L in
-      Alcotest.(check (option int)) "provenance stays with user A"
-        (Some uid_a) connected;
+      Alcotest.(check (option int))
+        "provenance stays with user A" (Some uid_a) connected;
       Lwt.return_unit)
 
 let inaccessible_reactivation_case =
@@ -417,8 +412,8 @@ let inaccessible_reactivation_case =
       Alcotest.(check bool) "revoked_at stays NULL" true revoked_null;
       Alcotest.(check int64) "account id unchanged" acct_b acct;
       Alcotest.(check string) "account type unchanged" type_b account_type;
-      Alcotest.(check (option int)) "connected user unchanged" connected_b
-        connected;
+      Alcotest.(check (option int))
+        "connected user unchanged" connected_b connected;
       Alcotest.(check (float 0.)) "created_at unchanged" created_b created;
       Lwt.return_unit)
 
@@ -436,7 +431,8 @@ let revoked_terminal_case =
       let* before = row conn 935000025L in
       let* revoked_at_before = C.find q_revoked_at_epoch 935000025L in
       let* revoked_at_before = or_fail "revoked_at" revoked_at_before in
-      Alcotest.(check bool) "fixture has revoked_at" true
+      Alcotest.(check bool)
+        "fixture has revoked_at" true
         (revoked_at_before <> None);
       let* v2 =
         verified ~installation_id:935000025L ~account_id:935100025L
@@ -447,8 +443,8 @@ let revoked_terminal_case =
       check_same_row "revoked row" before after;
       let* revoked_at_after = C.find q_revoked_at_epoch 935000025L in
       let* revoked_at_after = or_fail "revoked_at after" revoked_at_after in
-      Alcotest.(check (option (float 0.))) "revoked_at unchanged"
-        revoked_at_before revoked_at_after;
+      Alcotest.(check (option (float 0.)))
+        "revoked_at unchanged" revoked_at_before revoked_at_after;
       Lwt.return_unit)
 
 let conflicting_account_id_case =
@@ -465,8 +461,7 @@ let conflicting_account_id_case =
         verified ~installation_id:935000026L ~account_id:935100027L
           ~login:"impostor" ~target:"User" ()
       in
-      let* () = record_unavailable "account id conflict" conn ~user:uid v2
-      in
+      let* () = record_unavailable "account id conflict" conn ~user:uid v2 in
       let* n = count conn 935000026L in
       Alcotest.(check int) "still one row" 1 n;
       let* after = row conn 935000026L in
@@ -487,9 +482,7 @@ let conflicting_account_type_case =
         verified ~installation_id:935000028L ~account_id:935100028L
           ~login:"typed-owner" ~target:"Organization" ()
       in
-      let* () =
-        record_unavailable "account type conflict" conn ~user:uid v2
-      in
+      let* () = record_unavailable "account type conflict" conn ~user:uid v2 in
       let* n = count conn 935000028L in
       Alcotest.(check int) "still one row" 1 n;
       let* after = row conn 935000028L in
@@ -545,8 +538,7 @@ let concurrent_identical_case =
           in
           let check_ok label = function
             | Ok () -> ()
-            | Error e ->
-                Alcotest.failf "%s: unexpected %s" label (error_str e)
+            | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
           in
           check_ok "first writer" r1;
           check_ok "second writer" r2;
@@ -558,8 +550,7 @@ let concurrent_identical_case =
           Alcotest.(check string) "row is active" "active" status;
           Alcotest.(check int64) "stored account id" 935100031L acct;
           Alcotest.(check string) "stored login" "race-owner" login;
-          Alcotest.(check string) "stored account type" "user"
-            account_type;
+          Alcotest.(check string) "stored account type" "user" account_type;
           Lwt.return_unit))
 
 let concurrent_conflicting_case =
@@ -590,8 +581,8 @@ let concurrent_conflicting_case =
                   | Ok () -> "Ok"
                   | Error e -> error_str e
                 in
-                Alcotest.failf "unexpected outcome pair: %s / %s"
-                  (render r1) (render r2)
+                Alcotest.failf "unexpected outcome pair: %s / %s" (render r1)
+                  (render r2)
           in
           let* n = count conn 935000032L in
           Alcotest.(check int) "exactly one row" 1 n;
@@ -604,47 +595,56 @@ let concurrent_conflicting_case =
           (* The complete winning identity, never a mixture. *)
           Alcotest.(check int64) "winner's account id" expected_acct acct;
           Alcotest.(check string) "winner's login" expected_login login;
-          Alcotest.(check string) "winner's account type" expected_type
-            account_type;
+          Alcotest.(check string)
+            "winner's account type" expected_type account_type;
           Lwt.return_unit))
 
 let credential_absence_case =
-  db_case "record: no credential material reaches stored values"
-    (fun conn ->
+  db_case "record: no credential material reaches stored values" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* uid = insert_user conn "ghinstall_a" in
       let* v =
-        verified ~token_body:refresh_token_body
-          ~installation_id:935000033L ~account_id:935100034L
-          ~login:"credential-check" ~target:"User" ()
+        verified ~token_body:refresh_token_body ~installation_id:935000033L
+          ~account_id:935100034L ~login:"credential-check" ~target:"User" ()
       in
       let* () = record_ok "record" conn ~user:uid v in
       let* stored = C.find q_row_text 935000033L in
       let* stored = or_fail "row text" stored in
       List.iter
         (fun (label, needle) ->
-          Alcotest.(check bool) (label ^ " absent from stored values")
+          Alcotest.(check bool)
+            (label ^ " absent from stored values")
             false
             (Html_assert.contains_nonempty ~needle stored))
-        [ ("access token", gis_access_fixture)
-        ; ("refresh token", gis_refresh_fixture)
-        ; ("authorization code", Github_fixture.gte_code_string)
-        ; ("PKCE verifier", Github_fixture.gte_verifier_string)
-        ; ("client secret", Github_fixture.gte_client_secret)
+        [
+          ("access token", gis_access_fixture);
+          ("refresh token", gis_refresh_fixture);
+          ("authorization code", Github_fixture.gte_code_string);
+          ("PKCE verifier", Github_fixture.gte_verifier_string);
+          ("client secret", Github_fixture.gte_client_secret);
         ];
       Lwt.return_unit)
 
 let suite =
-  [ fresh_insert_case; invalid_user_case; missing_user_case;
-    idempotent_case; login_refresh_case; reconnecting_user_case;
-    inaccessible_reactivation_case; revoked_terminal_case;
-    conflicting_account_id_case; conflicting_account_type_case;
-    same_account_two_installations_case; concurrent_identical_case;
-    concurrent_conflicting_case; credential_absence_case ]
+  [
+    fresh_insert_case;
+    invalid_user_case;
+    missing_user_case;
+    idempotent_case;
+    login_refresh_case;
+    reconnecting_user_case;
+    inaccessible_reactivation_case;
+    revoked_terminal_case;
+    conflicting_account_id_case;
+    conflicting_account_type_case;
+    same_account_two_installations_case;
+    concurrent_identical_case;
+    concurrent_conflicting_case;
+    credential_absence_case;
+  ]
 
 let suites =
-    (* Verified-installation persistence: the whole contract lives in one
+  (* Verified-installation persistence: the whole contract lives in one
        atomic upsert, so only Postgres can pin it down; same
        EARDE_TEST_DATABASE_URL gate (each case skips without it). *)
-  [ ( "github_installation_store", suite )
-  ]
+  [ ("github_installation_store", suite) ]

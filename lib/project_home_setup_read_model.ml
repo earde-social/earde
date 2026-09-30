@@ -137,29 +137,24 @@ let account_type_of_db value =
    from plain absence (zero rows), while everyone else still gets zero
    rows. One statement means one consistent snapshot. *)
 let repository_row =
-  Caqti_type.(
-    t2 (t4 int string string (option string)) (t3 string bool bool))
+  Caqti_type.(t2 (t4 int string string (option string)) (t3 string bool bool))
 
 let load_for_steward_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int)
-   ->* Caqti_type.(
-         t2
-           (t2
-              (t4 int64 string string (option string))
-              (t4 (option string) string string string))
-           (option repository_row)))
-    "SELECT p.id, p.name, p.slug, p.description, \
-            p.website_url, p.kind, p.forge_namespace_login, \
-            p.forge_namespace_type, \
-            r.position, r.full_name, r.html_url, r.description, \
-            r.default_branch, r.is_primary, r.is_archived \
-     FROM open_source_projects p \
-     JOIN project_stewards s \
-       ON s.project_id = p.id AND s.user_id = $2 \
-     LEFT JOIN project_repositories r ON r.project_id = p.id \
-     WHERE p.slug = $1 AND p.verification_status = 'verified' \
-     ORDER BY r.position"
+  ->* Caqti_type.(
+        t2
+          (t2
+             (t4 int64 string string (option string))
+             (t4 (option string) string string string))
+          (option repository_row)))
+    "SELECT p.id, p.name, p.slug, p.description, p.website_url, p.kind, \
+     p.forge_namespace_login, p.forge_namespace_type, r.position, r.full_name, \
+     r.html_url, r.description, r.default_branch, r.is_primary, r.is_archived \
+     FROM open_source_projects p JOIN project_stewards s ON s.project_id = \
+     p.id AND s.user_id = $2 LEFT JOIN project_repositories r ON r.project_id \
+     = p.id WHERE p.slug = $1 AND p.verification_status = 'verified' ORDER BY \
+     r.position"
 
 (* Every structural rule one repository row must satisfy on its own.
    Errors are deliberately unit: which rule failed on which value must not
@@ -170,9 +165,9 @@ let repository_of_row
   let valid =
     position > 0
     && (match split_full_name full_name with
-       | None -> false
-       | Some (owner_login, name) ->
-           String.equal html_url (canonical_html_url ~owner_login ~name))
+      | None -> false
+      | Some (owner_login, name) ->
+          String.equal html_url (canonical_html_url ~owner_login ~name))
     && valid_branch default_branch
     &&
     match description with

@@ -36,7 +36,6 @@ type feedback =
   | Active_home_exists
   | Provisioning_failed
 
-
 (* Descriptive kind labels without endorsement language, identical to the
    permanent setup page's vocabulary. *)
 let kind_copy = function
@@ -66,35 +65,39 @@ let valid_project_slug value =
    length, or which durable row lost a race. *)
 let feedback_copy = function
   | Stale_form ->
-      Html.static "This page had been open too long, so the form could no longer be \
-       submitted. Nothing was created. Fill it in again and submit."
+      Html.static
+        "This page had been open too long, so the form could no longer be \
+         submitted. Nothing was created. Fill it in again and submit."
   | Invalid_form ->
-      Html.static "We couldn't read that submission. Review the form and try again."
+      Html.static
+        "We couldn't read that submission. Review the form and try again."
   | Invalid_community_name -> Html.static "Enter a community name we can use."
   | Invalid_community_slug ->
-      Html.static "Enter a community address using lowercase letters, numbers, and \
-       single hyphens."
+      Html.static
+        "Enter a community address using lowercase letters, numbers, and \
+         single hyphens."
   | Invalid_community_description ->
       Html.static "That description can't be used. Edit it and try again."
   | Community_slug_unavailable ->
       Html.static "That community address is already taken. Choose another one."
   | Active_home_exists ->
-      Html.static "This project already has a pending request or community home."
-  | Provisioning_failed -> Html.static "We couldn't create the community. Try again."
+      Html.static
+        "This project already has a pending request or community home."
+  | Provisioning_failed ->
+      Html.static "We couldn't create the community. Try again."
 
 let feedback_html = function
   | None -> Html.empty
   | Some feedback ->
-      (Html.template "<div class='phv-alert'><p>%s</p></div>"
-  [ (feedback_copy feedback) ])
+      Html.template "<div class='phv-alert'><p>%s</p></div>"
+        [ feedback_copy feedback ]
 
 let heading_html =
-  (Html.static "<div class='create-head'>\
-   <h1 class='create-title'>Create a community home</h1>\
-   <p class='create-sub phv-intro'>Create a private setup draft for this \
-   project, then configure and publish it as Public or Unlisted.</p>\
-   <p class='phv-verified'>Project connected through GitHub</p>\
-   </div>")
+  Html.static
+    "<div class='create-head'><h1 class='create-title'>Create a community \
+     home</h1><p class='create-sub phv-intro'>Create a private setup draft for \
+     this project, then configure and publish it as Public or Unlisted.</p><p \
+     class='phv-verified'>Project connected through GitHub</p></div>"
 
 (* The project this home would belong to, as plain identity. The description
    is escaped text — never Markdown, never HTML. *)
@@ -103,38 +106,34 @@ let project_html (project : project) =
     match project.description with
     | None -> Html.empty
     | Some text ->
-        (Html.template "<p class='phv-project-desc'>%s</p>"
-  [ (Html.text (text)) ])
+        Html.template "<p class='phv-project-desc'>%s</p>" [ Html.text text ]
   in
-  (Html.template "<section class='phv-project'>\
-     <h2 class='phv-project-name'>%s</h2>\
-     <p class='phv-project-meta'>%s &middot; %s</p>%s\
-     </section>"
-  [ (Html.text (project.name))
-  ; (kind_copy project.kind)
-  ; (Html.text (project.namespace_login))
-  ; description ])
+  Html.template
+    "<section class='phv-project'><h2 class='phv-project-name'>%s</h2><p \
+     class='phv-project-meta'>%s &middot; %s</p>%s</section>"
+    [
+      Html.text project.name;
+      kind_copy project.kind;
+      Html.text project.namespace_login;
+      description;
+    ]
 
 (* What creating the home does and does not do. Publication is named as a
    later explicit action with exactly the two choices it offers, so nobody
    expects a fully private published community. *)
 let explanation_html =
-  (Html.static "<section class='phv-explain'>\
-   <h2 class='phv-explain-title'>What happens next</h2>\
-   <ul class='phv-explain-list'>\
-   <li>The community is created as a private setup draft. It is not public \
-   yet.</li>\
-   <li>Only authorized setup users can reach it before publication.</li>\
-   <li>You become the community&#39;s initial top moderator as this \
-   project&#39;s steward.</li>\
-   <li>Publication is a separate, later step you take yourself.</li>\
-   <li>When you publish, you choose Public or Unlisted. A published network \
-   community keeps a public home, with private rooms available inside \
-   it.</li>\
-   <li>The project is connected to the new community as its home at the same \
-   moment the community is created.</li>\
-   </ul>\
-   </section>")
+  Html.static
+    "<section class='phv-explain'><h2 class='phv-explain-title'>What happens \
+     next</h2><ul class='phv-explain-list'><li>The community is created as a \
+     private setup draft. It is not public yet.</li><li>Only authorized setup \
+     users can reach it before publication.</li><li>You become the \
+     community&#39;s initial top moderator as this project&#39;s \
+     steward.</li><li>Publication is a separate, later step you take \
+     yourself.</li><li>When you publish, you choose Public or Unlisted. A \
+     published network community keeps a public home, with private rooms \
+     available inside it.</li><li>The project is connected to the new \
+     community as its home at the same moment the community is \
+     created.</li></ul></section>"
 
 (* The one form. No application-owned hidden field exists: the route path
    supplies the project slug, and the future POST handler re-derives the user
@@ -151,32 +150,32 @@ let form_html ?request ~project_slug ~(values : form_values) () =
     | None -> Html.empty
     | Some request -> Csrf_field.tag request
   in
-  (Html.template "<form method='POST' action='/projects/%s/community-home' \
-     class='create-form phv-form'>%s\
-     <label class='phv-field'>Community name\
-     <input type='text' name='community_name' maxlength='120' value='%s'>\
-     </label>\
-     <label class='phv-field'>Community address\
-     <input type='text' name='community_slug' maxlength='80' value='%s'>\
-     </label>\
-     <p class='phv-hint'>The community will live at /c/&lt;address&gt;. Use \
-     lowercase letters, numbers, and single hyphens.</p>\
-     <label class='phv-field'>Community description\
-     <textarea name='community_description' maxlength='2000' rows='6'>%s\
-     </textarea></label>\
-     <div class='create-actions'><button type='submit' class='create-btn \
-     create-btn--block'>Create private draft</button></div>\
-     </form>"
-  [ (Html.text (project_slug))
-  ; csrf_field
-  ; (Html.text (values.community_name))
-  ; (Html.text (values.community_slug))
-  ; (Html.text (values.community_description)) ])
+  Html.template
+    "<form method='POST' action='/projects/%s/community-home' \
+     class='create-form phv-form'>%s<label class='phv-field'>Community \
+     name<input type='text' name='community_name' maxlength='120' \
+     value='%s'></label><label class='phv-field'>Community address<input \
+     type='text' name='community_slug' maxlength='80' value='%s'></label><p \
+     class='phv-hint'>The community will live at /c/&lt;address&gt;. Use \
+     lowercase letters, numbers, and single hyphens.</p><label \
+     class='phv-field'>Community description<textarea \
+     name='community_description' maxlength='2000' \
+     rows='6'>%s</textarea></label><div class='create-actions'><button \
+     type='submit' class='create-btn create-btn--block'>Create private \
+     draft</button></div></form>"
+    [
+      Html.text project_slug;
+      csrf_field;
+      Html.text values.community_name;
+      Html.text values.community_slug;
+      Html.text values.community_description;
+    ]
 
 let setup_link_html (project : project) =
-  (Html.template "<p class='phv-back'><a href='%s' class='create-link'>Back to project \
+  Html.template
+    "<p class='phv-back'><a href='%s' class='create-link'>Back to project \
      setup</a></p>"
-  [ (Html.internal_path (("/projects/" ^ project.slug ^ "/setup"))) ])
+    [ Html.internal_path ("/projects/" ^ project.slug ^ "/setup") ]
 
 (* Without a canonical project slug there is no POST target to build and no
    project-derived link to offer; the page degrades to its copy alone rather
@@ -196,7 +195,9 @@ let actions_html ?request ~(project : project) ~values () =
    fragment, so the byte-exact fragment the test suites slice is untouched.
    Markup only — no form, no field, no script, no inline style. *)
 let stepper_html =
-  let labels = List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let labels =
+    List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ]
+  in
   let active = 2 in
   let step index label =
     let dot_class, dot_text =
@@ -209,26 +210,32 @@ let stepper_html =
       if index = active then "step__label step__label--active"
       else "step__label"
     in
-    (Html.template "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
-  [ (Html.text dot_class)
-  ; (Html.text dot_text)
-  ; (Html.text label_class)
-  ; label ])
+    Html.template
+      "<li class='step'><span class='%s'>%s</span><span \
+       class='%s'>%s</span></li>"
+      [ Html.text dot_class; Html.text dot_text; Html.text label_class; label ]
   in
-  (Html.template "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
-  [ (Html.join (Html.static "<li class='step__rule' aria-hidden='true'></li>")
-       (List.mapi step labels)) ])
+  Html.template
+    "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+    [
+      Html.join
+        (Html.static "<li class='step__rule' aria-hidden='true'></li>")
+        (List.mapi step labels);
+    ]
 
 let project_home_provisioning_page ?user ?request ~project ~values ~feedback ()
     =
   let body =
-    (Html.template "<div class='create-wrap project-home-provisioning'><div \
+    Html.template
+      "<div class='create-wrap project-home-provisioning'><div \
        class='create-panel'>%s%s%s%s%s</div></div>"
-  [ (feedback_html feedback)
-  ; heading_html
-  ; (project_html project)
-  ; explanation_html
-  ; (actions_html ?request ~project ~values ()) ])
+      [
+        feedback_html feedback;
+        heading_html;
+        project_html project;
+        explanation_html;
+        actions_html ?request ~project ~values ();
+      ]
   in
   (* noindex: a steward-only setup surface — not for search indexes. *)
   Page_shell.launch_onboarding_page ?user ?request ~noindex:true

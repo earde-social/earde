@@ -29,7 +29,9 @@ type 'job t = {
 type stats = { outstanding : int; queued : int; running : int }
 
 let monotonic_sleep seconds =
-  let deadline = Int64.add (Mtime_clock.now_ns ()) (Int64.of_float (seconds *. 1e9)) in
+  let deadline =
+    Int64.add (Mtime_clock.now_ns ()) (Int64.of_float (seconds *. 1e9))
+  in
   (* Lwt's timer may run on wall-clock time, depending on the engine. Checking
      the monotonic clock and sleeping again for any remainder makes a
      forward clock step unable to end the slot early. *)
@@ -40,9 +42,11 @@ let monotonic_sleep seconds =
   in
   wait ()
 
-let create ?(config = default_config) ?(sleep = monotonic_sleep) ~label ~transport () =
-  if config.capacity <= 0 || config.concurrency <= 0
-     || not (config.timeout_seconds > 0.0)
+let create ?(config = default_config) ?(sleep = monotonic_sleep) ~label
+    ~transport () =
+  if
+    config.capacity <= 0 || config.concurrency <= 0
+    || not (config.timeout_seconds > 0.0)
   then invalid_arg "Auth_mail_dispatcher.create: bounds must be positive";
   {
     config;
@@ -55,7 +59,11 @@ let create ?(config = default_config) ?(sleep = monotonic_sleep) ~label ~transpo
   }
 
 let stats (t : _ t) =
-  { outstanding = t.outstanding; queued = Queue.length t.queue; running = t.running }
+  {
+    outstanding = t.outstanding;
+    queued = Queue.length t.queue;
+    running = t.running;
+  }
 
 (* Starts one attempt and returns what the slot deadline needs: a closure
    that cancels the attempt if it is still running. That closure and the

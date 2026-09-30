@@ -19,9 +19,7 @@ let community_visibility_of_string = function
    variant mirrors the DB CHECK (communities_onboarding_state_check) exactly.
    _of_string returns an explicit Error for off-enum values — a corrupt state must
    surface at the boundary, never silently read as published. *)
-type community_onboarding_state =
-  | Community_draft
-  | Community_published
+type community_onboarding_state = Community_draft | Community_published
 
 let string_of_community_onboarding_state = function
   | Community_draft -> "draft"
@@ -92,7 +90,10 @@ type community_row =
 
 let community_row_type : community_row Caqti_type.t =
   let open Caqti_type in
-  t4 (t4 int string string (option string)) (t4 (option string) (option string) (option string) bool) (t3 bool string bool) (t3 bool string bool)
+  t4
+    (t4 int string string (option string))
+    (t4 (option string) (option string) (option string) bool)
+    (t3 bool string bool) (t3 bool string bool)
 
 (* DB-decode boundary (private): an off-enum onboarding_state raises rather than
    decoding to ANY valid lifecycle state — a corrupt value must fail loudly, not be
@@ -103,13 +104,32 @@ let community_onboarding_state_of_string_exn s =
   | Ok v -> v
   | Error msg -> failwith msg
 
-let map_community_row ((id, slug, name, description), (rules, avatar_url, banner_url, allow_downvotes), (sections_enabled, visibility_s, indexable), (is_network_community, onboarding_state_s, discoverable)) =
+let map_community_row
+    ( (id, slug, name, description),
+      (rules, avatar_url, banner_url, allow_downvotes),
+      (sections_enabled, visibility_s, indexable),
+      (is_network_community, onboarding_state_s, discoverable) ) =
   (* Fail closed: an unrecognized visibility decodes to Community_private, never public —
      this is a privacy field, so a corrupt/unexpected value must err toward hiding, not
      exposing; the DB CHECK constraint makes the fallback unreachable in normal operation.
      onboarding_state has no such fallback: an off-enum value raises (see above). *)
-  { id; slug; name; description; rules; avatar_url; banner_url; allow_downvotes; sections_enabled;
-    visibility = Option.value (community_visibility_of_string visibility_s) ~default:Community_private; indexable;
+  {
+    id;
+    slug;
+    name;
+    description;
+    rules;
+    avatar_url;
+    banner_url;
+    allow_downvotes;
+    sections_enabled;
+    visibility =
+      Option.value
+        (community_visibility_of_string visibility_s)
+        ~default:Community_private;
+    indexable;
     is_network_community;
-    onboarding_state = community_onboarding_state_of_string_exn onboarding_state_s;
-    discoverable }
+    onboarding_state =
+      community_onboarding_state_of_string_exn onboarding_state_s;
+    discoverable;
+  }

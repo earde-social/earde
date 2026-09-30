@@ -14,9 +14,7 @@ type action =
   | Connection_rejected
   | Connection_removed
 
-type error =
-  | Inconsistent_data
-  | Storage_error
+type error = Inconsistent_data | Storage_error
 
 (* The durable vocabulary, byte-for-byte the table's CHECK. Shared with the
    read side so the four spellings exist in exactly one place. *)
@@ -40,12 +38,10 @@ let action_of_string = function
 let insert_event_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 string int) (t3 int64 int int))
-   ->? Caqti_type.(t2 int64 string))
-  "INSERT INTO community_connection_audit_events \
-     (action, actor_user_id, connection_id, \
-      requester_community_id, recipient_community_id) \
-   VALUES ($1, $2, $3, $4, $5) \
-   RETURNING id, action"
+  ->? Caqti_type.(t2 int64 string))
+    "INSERT INTO community_connection_audit_events (action, actor_user_id, \
+     connection_id, requester_community_id, recipient_community_id) VALUES \
+     ($1, $2, $3, $4, $5) RETURNING id, action"
 
 let insert (module C : Caqti_lwt.CONNECTION) ~action ~actor_user_id
     ~connection_id ~requester_community_id ~recipient_community_id =

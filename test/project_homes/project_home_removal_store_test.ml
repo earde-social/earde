@@ -18,31 +18,19 @@ module Phr = Earde.Project_home_relation
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Rm = Earde.Project_home_removal_store
-
 module Rq = Earde.Project_home_request_store
-
 module Rv = Earde.Project_home_review_store
 
 let status_str = Phr.string_of_status
-
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let make_project = Home_request_fixture.make_project
-
 let insert_community = Community_fixture.insert_community
-
 let contains = Html_assert.occurs
-
 let relation_row = Home_request_fixture.relation_row
-
 let serialized_mutation_first = Db_fixture.serialized_mutation_first
 
 (* Same dependency order as the sibling suites. Users are deleted after
@@ -50,20 +38,19 @@ let serialized_mutation_first = Db_fixture.serialized_mutation_first
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 947300001 AND 947300999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 947300001 AND 947300999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 947200001 AND 947200999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'phrm-%'"
-    ; "DELETE FROM users WHERE username LIKE 'phrm_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 947200001 AND 947200999"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 947300001 \
+       AND 947300999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       947300001 AND 947300999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 947200001 AND 947200999)";
+      "DELETE FROM communities WHERE slug LIKE 'phrm-%'";
+      "DELETE FROM users WHERE username LIKE 'phrm_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       947200001 AND 947200999";
     ]
 
 (* An automatically provisioned accepted home: no requester, no reviewer,
@@ -72,9 +59,9 @@ let q_cleanup =
    rather than through a test-only constructor. *)
 let q_provision_accepted =
   (Caqti_type.(t2 int64 int) ->! Caqti_type.int64)
-  "INSERT INTO community_projects \
-     (project_id, community_id, relation_type, status, reviewed_at) \
-   VALUES ($1, $2, 'home', 'accepted', NOW()) RETURNING id"
+    "INSERT INTO community_projects (project_id, community_id, relation_type, \
+     status, reviewed_at) VALUES ($1, $2, 'home', 'accepted', NOW()) RETURNING \
+     id"
 
 (* Everything removal must leave byte-identical: both foreign keys, the
    relation type, requester, reviewer, the private note, and the exact
@@ -82,29 +69,25 @@ let q_provision_accepted =
    deliberately absent — those three are what removal writes. *)
 let q_relation_stable_sig =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT project_id::text || '|' || community_id::text || '|' || \
-          relation_type || '|' || \
-          COALESCE(requested_by_user_id::text, '<null>') || '|' || \
-          COALESCE(reviewed_by_user_id::text, '<null>') || '|' || \
-          COALESCE(request_note, '<null>') || '|' || \
-          COALESCE(reviewed_at::text, '<null>') || '|' || \
-          created_at::text \
-   FROM community_projects WHERE id = $1"
+    "SELECT project_id::text || '|' || community_id::text || '|' || \
+     relation_type || '|' || COALESCE(requested_by_user_id::text, '<null>') || \
+     '|' || COALESCE(reviewed_by_user_id::text, '<null>') || '|' || \
+     COALESCE(request_note, '<null>') || '|' || COALESCE(reviewed_at::text, \
+     '<null>') || '|' || created_at::text FROM community_projects WHERE id = \
+     $1"
 
 (* Removal-time coherence, NULL-safe: presence plus ordering against the
    review and creation instants (a NULL comparison coalesces to FALSE,
    never a decode error). *)
 let q_removed_times =
   (Caqti_type.int64 ->! Caqti_type.(t2 (t2 bool bool) (t2 bool bool)))
-  "SELECT removed_at IS NOT NULL, \
-          COALESCE(removed_at >= reviewed_at, FALSE), \
-          COALESCE(removed_at >= created_at, FALSE), \
-          updated_at >= created_at \
-   FROM community_projects WHERE id = $1"
+    "SELECT removed_at IS NOT NULL, COALESCE(removed_at >= reviewed_at, \
+     FALSE), COALESCE(removed_at >= created_at, FALSE), updated_at >= \
+     created_at FROM community_projects WHERE id = $1"
 
 let q_status =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT status FROM community_projects WHERE id = $1"
+    "SELECT status FROM community_projects WHERE id = $1"
 
 (* Test-only failure injection for the rollback case: an AFTER UPDATE
    trigger scoped to one reserved note value, installed only once the
@@ -115,24 +98,24 @@ let phrm_poison_note = "phrm poison marker"
 
 let q_create_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE FUNCTION phrm_fail_update_fn() RETURNS trigger
-   LANGUAGE plpgsql
-   AS 'BEGIN RAISE EXCEPTION ''phrm fixture failure''; END'"
+    "CREATE FUNCTION phrm_fail_update_fn() RETURNS trigger\n\
+    \   LANGUAGE plpgsql\n\
+    \   AS 'BEGIN RAISE EXCEPTION ''phrm fixture failure''; END'"
 
 let q_create_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE TRIGGER phrm_fail_update
-   AFTER UPDATE ON community_projects
-   FOR EACH ROW WHEN (NEW.request_note = 'phrm poison marker')
-   EXECUTE FUNCTION phrm_fail_update_fn()"
+    "CREATE TRIGGER phrm_fail_update\n\
+    \   AFTER UPDATE ON community_projects\n\
+    \   FOR EACH ROW WHEN (NEW.request_note = 'phrm poison marker')\n\
+    \   EXECUTE FUNCTION phrm_fail_update_fn()"
 
 let q_drop_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP TRIGGER IF EXISTS phrm_fail_update ON community_projects"
+    "DROP TRIGGER IF EXISTS phrm_fail_update ON community_projects"
 
 let q_drop_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP FUNCTION IF EXISTS phrm_fail_update_fn()"
+    "DROP FUNCTION IF EXISTS phrm_fail_update_fn()"
 
 (* Each case gets a fresh connection and a clean fixture slate; cleanup
    runs again afterwards even when an assertion fails mid-way, and the
@@ -157,8 +140,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
    dropped for the whole case: these fixtures deliberately write drift
@@ -168,7 +150,8 @@ let db_case name f =
 let db_case_lifecycle_relaxed name f =
   db_case name (fun conn ->
       Network_community_lifecycle_constraint.around conn
-        ~cleanup:(fun () -> Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
+        ~cleanup:(fun () ->
+          Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
         (fun () -> f conn))
 
 (* === call helpers === *)
@@ -186,15 +169,20 @@ let remove_ok label conn ~actor ~slug ~community =
         (status_str Phr.Removed)
         (status_str (Rm.resulting_status removed));
       Lwt.return_unit
-  | Error e -> Alcotest.failf "%s: %s" label (Connected_projects_fixture.error_str e)
+  | Error e ->
+      Alcotest.failf "%s: %s" label (Connected_projects_fixture.error_str e)
 
 let remove_expect label expected conn ~actor ~slug ~community =
   let* r = remove conn ~actor ~slug ~community in
   match r with
   | Ok _ ->
-      Alcotest.failf "%s: expected %s, got Ok" label (Connected_projects_fixture.error_str expected)
+      Alcotest.failf "%s: expected %s, got Ok" label
+        (Connected_projects_fixture.error_str expected)
   | Error e ->
-      Alcotest.(check string) label (Connected_projects_fixture.error_str expected) (Connected_projects_fixture.error_str e);
+      Alcotest.(check string)
+        label
+        (Connected_projects_fixture.error_str expected)
+        (Connected_projects_fixture.error_str e);
       Lwt.return_unit
 
 (* === fixtures === *)
@@ -202,7 +190,9 @@ let remove_expect label expected conn ~actor ~slug ~community =
 (* Pending requests come only through the real request store and the real
    pure constructor. *)
 let request_ok label conn ~user ~slug ~community ?note () =
-  let relation = Home_request_fixture.phr_expect_ok (Phr.create_pending ~request_note:note) in
+  let relation =
+    Home_request_fixture.phr_expect_ok (Phr.create_pending ~request_note:note)
+  in
   let* r =
     Rq.create conn ~user_id:user ~project_slug:slug
       ~target_community_id:community ~relation
@@ -241,13 +231,11 @@ let provisioned_home label conn ~project ~community_id =
   or_fail label rid
 
 let add_role conn ~user ~community role =
-  exec conn "role fixture" Community_fixture.q_insert_moderator (user, community, role)
+  exec conn "role fixture" Community_fixture.q_insert_moderator
+    (user, community, role)
 
-let add_top_mod conn ~user ~community =
-  add_role conn ~user ~community "top_mod"
-
+let add_top_mod conn ~user ~community = add_role conn ~user ~community "top_mod"
 let stable_sig conn id = find conn "stable sig" q_relation_stable_sig id
-
 let status_of conn id = find conn "status" q_status id
 
 let check_accepted_unchanged label conn id before =
@@ -272,24 +260,27 @@ let check_removed label conn id before =
     find conn "removed times" q_removed_times id
   in
   Alcotest.(check bool) (label ^ ": removed_at present") true present;
-  Alcotest.(check bool) (label ^ ": removed_at >= reviewed_at") true
-    after_reviewed;
-  Alcotest.(check bool) (label ^ ": removed_at >= created_at") true
-    after_created;
+  Alcotest.(check bool)
+    (label ^ ": removed_at >= reviewed_at")
+    true after_reviewed;
+  Alcotest.(check bool)
+    (label ^ ": removed_at >= created_at")
+    true after_created;
   Alcotest.(check bool) (label ^ ": updated_at coherent") true updated_ge;
   Lwt.return_unit
 
 (* One winner plus one exact loser, order unasserted. *)
 let one_winner label (ra, rb) =
   match (ra, rb) with
-  | Ok w, Error Rm.Removal_unavailable | Error Rm.Removal_unavailable, Ok w ->
-      w
+  | Ok w, Error Rm.Removal_unavailable | Error Rm.Removal_unavailable, Ok w -> w
   | Ok _, Ok _ -> Alcotest.failf "%s: both succeeded" label
   | Error a, Error b ->
-      Alcotest.failf "%s: both failed (%s, %s)" label (Connected_projects_fixture.error_str a)
+      Alcotest.failf "%s: both failed (%s, %s)" label
+        (Connected_projects_fixture.error_str a)
         (Connected_projects_fixture.error_str b)
   | Ok _, Error e | Error e, Ok _ ->
-      Alcotest.failf "%s: unexpected loser error %s" label (Connected_projects_fixture.error_str e)
+      Alcotest.failf "%s: unexpected loser error %s" label
+        (Connected_projects_fixture.error_str e)
 
 (* === pure input validation === *)
 
@@ -316,8 +307,8 @@ let pure_inputs_case =
           ~community:"phrm-c"
       in
       let* () =
-        expect "negative user id" Rm.Invalid_user_id ~actor:(-7)
-          ~slug:"phrm-a" ~community:"phrm-c"
+        expect "negative user id" Rm.Invalid_user_id ~actor:(-7) ~slug:"phrm-a"
+          ~community:"phrm-c"
       in
       let* () =
         expect "user checked before slugs" Rm.Invalid_user_id ~actor:0
@@ -328,45 +319,46 @@ let pure_inputs_case =
           (fun bad ->
             expect "invalid project slug" Rm.Invalid_project_slug ~actor:1
               ~slug:bad ~community:"phrm-c")
-          [ ""
-          ; "Phrm-Upper"
-          ; "phrm slug"
-          ; " phrm-a"
-          ; "phrm-a "
-          ; "phrm_a"
-          ; "phrm/a"
-          ; "-phrm"
-          ; "phrm-"
-          ; "phrm--a"
-          ; String.make 81 'a'
+          [
+            "";
+            "Phrm-Upper";
+            "phrm slug";
+            " phrm-a";
+            "phrm-a ";
+            "phrm_a";
+            "phrm/a";
+            "-phrm";
+            "phrm-";
+            "phrm--a";
+            String.make 81 'a';
           ]
       in
       let* () =
         expect "project slug checked before community slug"
-          Rm.Invalid_project_slug ~actor:1 ~slug:"phrm--a"
-          ~community:"also bad"
+          Rm.Invalid_project_slug ~actor:1 ~slug:"phrm--a" ~community:"also bad"
       in
       Lwt_list.iter_s
         (fun bad ->
           expect "invalid community slug" Rm.Invalid_community_slug ~actor:1
             ~slug:"phrm-a" ~community:bad)
-        [ ""
-        ; "phrm c"
-        ; " phrm-c"
-        ; "phrm-c "
-        ; "phrm/c"
-        ; "phrm\tc"
-        ; "phrm\nc"
-        ; "phrm\x01c"
-        ; "phrm\x7fc"
+        [
+          "";
+          "phrm c";
+          " phrm-c";
+          "phrm-c ";
+          "phrm/c";
+          "phrm\tc";
+          "phrm\nc";
+          "phrm\x01c";
+          "phrm\x7fc";
         ])
 
 (* === project-side authorization === *)
 
 let steward_removal_case =
   db_case
-    "removal: a project steward removes a reviewed home, changing only \
-     status and the removal timestamps" (fun conn ->
+    "removal: a project steward removes a reviewed home, changing only status \
+     and the removal timestamps" (fun conn ->
       let* owner = insert_user conn "phrm_owner" in
       let* reviewer = insert_user conn "phrm_mod" in
       let* _, project =
@@ -380,12 +372,19 @@ let steward_removal_case =
           ~community_id:cid ~community_slug:"phrm-steward-home" ~note ()
       in
       let* before = stable_sig conn rid in
-      let* project_before = find conn "project sig" Home_request_fixture.q_project_sig project in
+      let* project_before =
+        find conn "project sig" Home_request_fixture.q_project_sig project
+      in
       let* community_before =
         find conn "community sig" Home_request_fixture.q_community_sig cid
       in
-      let* role_before = find conn "role" Home_review_fixture.q_role_sig (reviewer, cid) in
-      let* repos_before = find conn "repos" Connected_projects_fixture.q_count_repositories project in
+      let* role_before =
+        find conn "role" Home_review_fixture.q_role_sig (reviewer, cid)
+      in
+      let* repos_before =
+        find conn "repos" Connected_projects_fixture.q_count_repositories
+          project
+      in
       (* The steward is neither a member nor a moderator of the target. *)
       let* () =
         remove_ok "steward removes" conn ~actor:owner ~slug:"phrm-steward"
@@ -399,10 +398,10 @@ let steward_removal_case =
       Alcotest.(check int) "same community fk" cid rc;
       Alcotest.(check string) "relation type home" "home" rtype;
       Alcotest.(check (option int)) "requester preserved" (Some owner) req;
-      Alcotest.(check (option int)) "reviewer preserved, not overwritten"
-        (Some reviewer) rev;
-      Alcotest.(check (option string)) "note preserved byte-exact"
-        (Some note) stored_note;
+      Alcotest.(check (option int))
+        "reviewer preserved, not overwritten" (Some reviewer) rev;
+      Alcotest.(check (option string))
+        "note preserved byte-exact" (Some note) stored_note;
       (* Nothing else in the world moved. *)
       let* project_after =
         find conn "project sig after" Home_request_fixture.q_project_sig project
@@ -411,24 +410,37 @@ let steward_removal_case =
         find conn "community sig after" Home_request_fixture.q_community_sig cid
       in
       Alcotest.(check string) "project unchanged" project_before project_after;
-      Alcotest.(check string) "community unchanged" community_before
-        community_after;
-      let* repos_after = find conn "repos after" Connected_projects_fixture.q_count_repositories project in
+      Alcotest.(check string)
+        "community unchanged" community_before community_after;
+      let* repos_after =
+        find conn "repos after" Connected_projects_fixture.q_count_repositories
+          project
+      in
       Alcotest.(check int) "project content unchanged" repos_before repos_after;
-      let* members = find conn "members" Home_request_fixture.q_count_members cid in
+      let* members =
+        find conn "members" Home_request_fixture.q_count_members cid
+      in
       Alcotest.(check int) "no membership created or removed" 0 members;
-      let* mods = find conn "moderators" Home_request_fixture.q_count_moderators cid in
+      let* mods =
+        find conn "moderators" Home_request_fixture.q_count_moderators cid
+      in
       Alcotest.(check int) "moderator roster unchanged" 1 mods;
-      let* role_after = find conn "role after" Home_review_fixture.q_role_sig (reviewer, cid) in
+      let* role_after =
+        find conn "role after" Home_review_fixture.q_role_sig (reviewer, cid)
+      in
       Alcotest.(check string) "moderator role unchanged" role_before role_after;
       let* stewards =
-        find conn "stewards" Home_request_fixture.q_count_stewards_for_project project
+        find conn "stewards" Home_request_fixture.q_count_stewards_for_project
+          project
       in
       Alcotest.(check int) "stewardship unchanged" 1 stewards;
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "exactly the one historical row" 1 total;
       let* active =
-        find conn "active" Home_request_fixture.q_count_active_for_project project
+        find conn "active" Home_request_fixture.q_count_active_for_project
+          project
       in
       Alcotest.(check int) "active home slot freed" 0 active;
       Lwt.return_unit)
@@ -456,7 +468,8 @@ let steward_variants_case =
       in
       let* before1 = stable_sig conn rid1 in
       let* () =
-        exec conn "mark stale" Home_request_fixture.q_set_verification (project, "stale")
+        exec conn "mark stale" Home_request_fixture.q_set_verification
+          (project, "stale")
       in
       let* () =
         remove_ok "second steward removes a stale project's home" conn
@@ -477,20 +490,27 @@ let steward_variants_case =
       in
       let* before2 = stable_sig conn rid2 in
       let* () =
-        exec conn "mark revoked" Home_request_fixture.q_set_verification (project, "revoked")
+        exec conn "mark revoked" Home_request_fixture.q_set_verification
+          (project, "revoked")
       in
       let* () =
         remove_ok "original steward removes a revoked project's home" conn
           ~actor:owner ~slug:"phrm-stale" ~community:"phrm-stale-home"
       in
       let* () = check_removed "revoked removal" conn rid2 before2 in
-      let* project_sig = find conn "project sig" Home_request_fixture.q_project_sig project in
-      Alcotest.(check bool) "verification untouched by removal" true
+      let* project_sig =
+        find conn "project sig" Home_request_fixture.q_project_sig project
+      in
+      Alcotest.(check bool)
+        "verification untouched by removal" true
         (contains ~needle:"revoked" project_sig);
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "both historical rows retained" 2 total;
       let* active =
-        find conn "active" Home_request_fixture.q_count_active_for_project project
+        find conn "active" Home_request_fixture.q_count_active_for_project
+          project
       in
       Alcotest.(check int) "no active relation left" 0 active;
       Lwt.return_unit)
@@ -505,7 +525,9 @@ let community_side_case =
       let* first_mod = insert_user conn "phrm_mod1" in
       let* second_mod = insert_user conn "phrm_mod2" in
       let* admin = insert_user conn "phrm_admin" in
-      let* () = exec conn "grant admin" Community_fixture.q_set_admin (admin, true) in
+      let* () =
+        exec conn "grant admin" Community_fixture.q_set_admin (admin, true)
+      in
       let* _, project =
         make_project conn ~user:owner ~ext_id:947200003L ~slug:"phrm-modside"
       in
@@ -527,17 +549,17 @@ let community_side_case =
       let* () = check_removed "top mod removal" conn rid1 before1 in
       (* A second independently appointed top moderator removes a
          provisioned home — no requester, no reviewer, no note. *)
-      let* rid2 = provisioned_home "provisioned" conn ~project ~community_id:cid in
+      let* rid2 =
+        provisioned_home "provisioned" conn ~project ~community_id:cid
+      in
       let* before2 = stable_sig conn rid2 in
       let* () =
         remove_ok "second top mod removes a provisioned home" conn
-          ~actor:second_mod ~slug:"phrm-modside"
-          ~community:"phrm-modside-home"
+          ~actor:second_mod ~slug:"phrm-modside" ~community:"phrm-modside-home"
       in
       let* () = check_removed "provisioned removal" conn rid2 before2 in
       let* _, ((req, rev), (note, _)) = relation_row conn rid2 in
-      Alcotest.(check (option int)) "provisioned requester stays NULL" None
-        req;
+      Alcotest.(check (option int)) "provisioned requester stays NULL" None req;
       Alcotest.(check (option int)) "provisioned reviewer stays NULL" None rev;
       Alcotest.(check (option string)) "provisioned note stays NULL" None note;
       (* A durable global administrator — neither member nor moderator of
@@ -549,23 +571,27 @@ let community_side_case =
       in
       let* before3 = stable_sig conn rid3 in
       let* () =
-        remove_ok "durable admin removes" conn ~actor:admin
-          ~slug:"phrm-modside" ~community:"phrm-modside-home"
+        remove_ok "durable admin removes" conn ~actor:admin ~slug:"phrm-modside"
+          ~community:"phrm-modside-home"
       in
       let* () = check_removed "admin removal" conn rid3 before3 in
-      let* mods = find conn "moderators" Home_request_fixture.q_count_moderators cid in
+      let* mods =
+        find conn "moderators" Home_request_fixture.q_count_moderators cid
+      in
       Alcotest.(check int) "moderator roster unchanged" 2 mods;
       let* stewards =
-        find conn "stewards" Home_request_fixture.q_count_stewards_for_project project
+        find conn "stewards" Home_request_fixture.q_count_stewards_for_project
+          project
       in
       Alcotest.(check int) "stewardship unchanged" 1 stewards;
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "three historical rows" 3 total;
       Lwt.return_unit)
 
 let multiple_authority_case =
-  db_case
-    "removal: an actor holding two authorities still performs one removal"
+  db_case "removal: an actor holding two authorities still performs one removal"
     (fun conn ->
       let* owner = insert_user conn "phrm_owner" in
       let* reviewer = insert_user conn "phrm_mod" in
@@ -589,13 +615,18 @@ let multiple_authority_case =
       let* () = check_removed "dual-authority removal" conn rid before in
       (* Exactly one durable removal, and no authorization-source field
          exists to record which authority qualified. *)
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "exactly one relation row" 1 total;
       let* () =
         remove_expect "replay" Rm.Removal_unavailable conn ~actor:owner
           ~slug:"phrm-both" ~community:"phrm-both-home"
       in
-      let* total = find conn "total after replay" Home_request_fixture.q_count_for_project project in
+      let* total =
+        find conn "total after replay" Home_request_fixture.q_count_for_project
+          project
+      in
       Alcotest.(check int) "still exactly one relation row" 1 total;
       Lwt.return_unit)
 
@@ -627,13 +658,16 @@ let unauthorized_case =
       let* cid = insert_community conn "phrm-unauth-home" in
       let* other_cid = insert_community conn "phrm-unauth-other" in
       let* () = add_top_mod conn ~user:reviewer ~community:cid in
-      let* () = exec conn "member" Community_fixture.q_insert_member (member, cid) in
+      let* () =
+        exec conn "member" Community_fixture.q_insert_member (member, cid)
+      in
       let* () = add_role conn ~user:low_mod ~community:cid "mod" in
       let* () = add_role conn ~user:legacy_mod ~community:cid "legacy_mod" in
       let* () = add_top_mod conn ~user:other_mod ~community:other_cid in
       let* () = add_top_mod conn ~user:removed_mod ~community:cid in
       let* () =
-        exec conn "remove role" Community_fixture.q_remove_moderator (removed_mod, cid)
+        exec conn "remove role" Community_fixture.q_remove_moderator
+          (removed_mod, cid)
       in
       let* () = add_top_mod conn ~user:downgraded ~community:cid in
       let* () =
@@ -643,7 +677,8 @@ let unauthorized_case =
       (* Session/admin-shaped without durable backing: users.is_admin stays
          FALSE. *)
       let* () =
-        exec conn "explicit non-admin" Community_fixture.q_set_admin (adminish, false)
+        exec conn "explicit non-admin" Community_fixture.q_set_admin
+          (adminish, false)
       in
       let* rid =
         reviewed_home "home" conn ~owner ~reviewer ~slug:"phrm-unauth"
@@ -658,7 +693,8 @@ let unauthorized_case =
           (project, creator_only)
       in
       let* () =
-        exec conn "delete steward" Home_request_fixture.q_delete_steward (project, owner)
+        exec conn "delete steward" Home_request_fixture.q_delete_steward
+          (project, owner)
       in
       let* before = stable_sig conn rid in
       let expect label actor =
@@ -680,12 +716,17 @@ let unauthorized_case =
       (* No refusal granted, revoked or altered any role or link. *)
       (* The reviewer's top_mod row, the 'mod' and 'legacy_mod' rows, and
          the downgraded former top moderator; the removed one is gone. *)
-      let* mods = find conn "moderators" Home_request_fixture.q_count_moderators cid in
+      let* mods =
+        find conn "moderators" Home_request_fixture.q_count_moderators cid
+      in
       Alcotest.(check int) "moderator roster unchanged" 4 mods;
-      let* members = find conn "members" Home_request_fixture.q_count_members cid in
+      let* members =
+        find conn "members" Home_request_fixture.q_count_members cid
+      in
       Alcotest.(check int) "membership unchanged" 1 members;
       let* stewards =
-        find conn "stewards" Home_request_fixture.q_count_stewards_for_project project
+        find conn "stewards" Home_request_fixture.q_count_stewards_for_project
+          project
       in
       Alcotest.(check int) "stewardship unchanged" 0 stewards;
       (* The still-qualifying top moderator removes normally. *)
@@ -696,8 +737,8 @@ let unauthorized_case =
 
 let availability_case =
   db_case_lifecycle_relaxed
-    "removal: missing project and community collapse; valid lifecycle \
-     drift stays removable" (fun conn ->
+    "removal: missing project and community collapse; valid lifecycle drift \
+     stays removable" (fun conn ->
       let* owner = insert_user conn "phrm_owner" in
       let* reviewer = insert_user conn "phrm_mod" in
       let* _, project =
@@ -711,21 +752,24 @@ let availability_case =
       in
       let* before = stable_sig conn rid in
       let* () =
-        remove_expect "missing project" Rm.Project_unavailable conn
-          ~actor:owner ~slug:"phrm-absent" ~community:"phrm-avail-home"
+        remove_expect "missing project" Rm.Project_unavailable conn ~actor:owner
+          ~slug:"phrm-absent" ~community:"phrm-avail-home"
       in
       let* () =
         remove_expect "missing community" Rm.Community_unavailable conn
           ~actor:owner ~slug:"phrm-avail" ~community:"phrm-nowhere"
       in
-      let* () = check_accepted_unchanged "after availability probes" conn rid before in
+      let* () =
+        check_accepted_unchanged "after availability probes" conn rid before
+      in
       (* Each drifted lifecycle shape in turn: the home was accepted while
          the community was eligible, and must stay removable afterwards.
          The network setup draft is deliberately absent here — see the
          separate probe below. *)
       let drift =
-        [ ("fully private", Community_fixture.q_make_private)
-        ; ("legacy non-network", Community_fixture.q_make_legacy)
+        [
+          ("fully private", Community_fixture.q_make_private);
+          ("legacy non-network", Community_fixture.q_make_legacy);
         ]
       in
       let* () =
@@ -735,19 +779,22 @@ let availability_case =
                later ones are re-established on the restored community. *)
             let* rid =
               if i = 0 then Lwt.return rid
-              else (
+              else
                 let* () =
-                  exec conn "restore eligible" Home_review_fixture.q_make_eligible cid
+                  exec conn "restore eligible"
+                    Home_review_fixture.q_make_eligible cid
                 in
                 reviewed_home (label ^ ": home") conn ~owner ~reviewer
                   ~slug:"phrm-avail" ~community_id:cid
-                  ~community_slug:"phrm-avail-home" ())
+                  ~community_slug:"phrm-avail-home" ()
             in
             let* before = stable_sig conn rid in
             let* () = exec conn (label ^ ": drift") q_drift cid in
             let* () =
-              remove_ok (label ^ ": still removable") conn ~actor:owner
-                ~slug:"phrm-avail" ~community:"phrm-avail-home"
+              remove_ok
+                (label ^ ": still removable")
+                conn ~actor:owner ~slug:"phrm-avail"
+                ~community:"phrm-avail-home"
             in
             check_removed (label ^ ": removed") conn rid before)
           drift
@@ -761,14 +808,18 @@ let availability_case =
          lifecycle is the protected case, answered with the collapsed
          Removal_unavailable — covered by the dedicated protection
          suite.) *)
-      let* () = exec conn "restore eligible" Home_review_fixture.q_make_eligible cid in
+      let* () =
+        exec conn "restore eligible" Home_review_fixture.q_make_eligible cid
+      in
       let* draft_rid =
         reviewed_home "setup draft: home" conn ~owner ~reviewer
-          ~slug:"phrm-avail" ~community_id:cid
-          ~community_slug:"phrm-avail-home" ()
+          ~slug:"phrm-avail" ~community_id:cid ~community_slug:"phrm-avail-home"
+          ()
       in
       let* draft_before = stable_sig conn draft_rid in
-      let* () = exec conn "setup draft: drift" Community_fixture.q_make_draft_state cid in
+      let* () =
+        exec conn "setup draft: drift" Community_fixture.q_make_draft_state cid
+      in
       let* () =
         remove_expect "reviewed home under a setup draft is corruption"
           Rm.Inconsistent_data conn ~actor:owner ~slug:"phrm-avail"
@@ -781,20 +832,27 @@ let availability_case =
       (* Restored to an ordinary lifecycle, the very same row removes
          normally — proving the refusal was about the draft state, not the
          row. *)
-      let* () = exec conn "restore eligible" Home_review_fixture.q_make_eligible cid in
+      let* () =
+        exec conn "restore eligible" Home_review_fixture.q_make_eligible cid
+      in
       let* () =
         remove_ok "restored lifecycle removes" conn ~actor:owner
           ~slug:"phrm-avail" ~community:"phrm-avail-home"
       in
-      let* () = check_removed "restored lifecycle" conn draft_rid draft_before in
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      let* () =
+        check_removed "restored lifecycle" conn draft_rid draft_before
+      in
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "one historical row per drifted removal" 3 total;
       Lwt.return_unit)
 
 (* === durable corruption === *)
 
 let corruption_case =
-  db_case_lifecycle_relaxed "removal: malformed durable project, community and relation data"
+  db_case_lifecycle_relaxed
+    "removal: malformed durable project, community and relation data"
     (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* owner = insert_user conn "phrm_owner" in
@@ -825,7 +883,9 @@ let corruption_case =
       let* () =
         Lwt.finalize
           (fun () ->
-            let* () = exec conn "empty name" Community_fixture.q_set_name (cid, "") in
+            let* () =
+              exec conn "empty name" Community_fixture.q_set_name (cid, "")
+            in
             let* () = expect "blank community name" in
             let* () =
               exec conn "control-byte name" Community_fixture.q_set_name
@@ -841,18 +901,28 @@ let corruption_case =
       in
       let* () = exec conn "mix flags" Home_review_fixture.q_mix_flags cid in
       let* () = expect "mixed publication flags" in
-      let* () = exec conn "restore eligible" Home_review_fixture.q_make_eligible cid in
+      let* () =
+        exec conn "restore eligible" Home_review_fixture.q_make_eligible cid
+      in
       let* () = exec conn "leaky draft" Home_review_fixture.q_leaky_draft cid in
       let* () = expect "publicly listed draft" in
-      let* () = exec conn "restore eligible" Home_review_fixture.q_make_eligible cid in
-      let* () = exec conn "leaky private" Home_review_fixture.q_leaky_private cid in
+      let* () =
+        exec conn "restore eligible" Home_review_fixture.q_make_eligible cid
+      in
+      let* () =
+        exec conn "leaky private" Home_review_fixture.q_leaky_private cid
+      in
       let* () = expect "discoverable private community" in
-      let* () = exec conn "restore eligible" Home_review_fixture.q_make_eligible cid in
+      let* () =
+        exec conn "restore eligible" Home_review_fixture.q_make_eligible cid
+      in
       (* Relation shapes: a stored note outside the canonical shape cannot
          be reconstructed byte-exactly through the pure constructor. *)
       let* () = exec conn "pad note" Home_review_fixture.q_pad_note rid in
       let* () = expect "non-canonical padded note" in
-      let* () = exec conn "control-byte note" Home_review_fixture.q_control_note rid in
+      let* () =
+        exec conn "control-byte note" Home_review_fixture.q_control_note rid
+      in
       let* () = expect "forbidden control byte in note" in
       let* () = exec conn "clear note" Home_review_fixture.q_clear_note rid in
       (* An unknown project verification status is blocked by the
@@ -865,20 +935,21 @@ let corruption_case =
         Lwt.return_unit
       in
       let* () =
-        exec_ddl "drop verification check" Connected_projects_fixture.q_drop_verification_check
+        exec_ddl "drop verification check"
+          Connected_projects_fixture.q_drop_verification_check
       in
       let* () =
         Lwt.finalize
           (fun () ->
             let* () =
-              exec conn "unknown verification" Home_request_fixture.q_set_verification
-                (project, "phrm-unknown")
+              exec conn "unknown verification"
+                Home_request_fixture.q_set_verification (project, "phrm-unknown")
             in
             expect "unknown project verification status")
           (fun () ->
             let* () =
-              exec conn "restore verified" Home_request_fixture.q_set_verification
-                (project, "verified")
+              exec conn "restore verified"
+                Home_request_fixture.q_set_verification (project, "verified")
             in
             exec_ddl "restore verification check"
               Connected_projects_fixture.q_add_verification_check)
@@ -890,17 +961,19 @@ let corruption_case =
          validation branches stay defensive and are not reachable without
          weakening production constraints. *)
       let* after_clear = stable_sig conn rid in
-      Alcotest.(check bool) "only the note fixture changed the row" true
+      Alcotest.(check bool)
+        "only the note fixture changed the row" true
         (contains ~needle:"<null>" after_clear
         && not (contains ~needle:"Nota canonica" after_clear));
-      Alcotest.(check bool) "the original note was there to begin with" true
+      Alcotest.(check bool)
+        "the original note was there to begin with" true
         (contains ~needle:"Nota canonica" before);
       let* status = status_of conn rid in
       Alcotest.(check string) "still accepted throughout" "accepted" status;
       (* The restored row removes normally. *)
       let* () =
-        remove_ok "restored row removes" conn ~actor:owner
-          ~slug:"phrm-corrupt" ~community:"phrm-corrupt-home"
+        remove_ok "restored row removes" conn ~actor:owner ~slug:"phrm-corrupt"
+          ~community:"phrm-corrupt-home"
       in
       check_removed "restored row" conn rid after_clear)
 
@@ -926,8 +999,8 @@ let removal_unavailable_case =
       let* () = expect "no relation" "phrm-navail-home" in
       (* A pending request is not an accepted home. *)
       let* rid =
-        request_ok "pending" conn ~user:owner ~slug:"phrm-navail"
-          ~community:cid ()
+        request_ok "pending" conn ~user:owner ~slug:"phrm-navail" ~community:cid
+          ()
       in
       let* () = expect "pending request" "phrm-navail-home" in
       (* A rejected history row is not one either. *)
@@ -941,10 +1014,12 @@ let removal_unavailable_case =
         reviewed_home "home" conn ~owner ~reviewer ~slug:"phrm-navail"
           ~community_id:cid ~community_slug:"phrm-navail-home" ()
       in
-      let* () = expect "accepted home targets another community" "phrm-navail-other" in
+      let* () =
+        expect "accepted home targets another community" "phrm-navail-other"
+      in
       let* status = status_of conn rid2 in
-      Alcotest.(check string) "wrong-target probe left it accepted" "accepted"
-        status;
+      Alcotest.(check string)
+        "wrong-target probe left it accepted" "accepted" status;
       (* Removed, then the replay of a successful removal. *)
       let* () =
         remove_ok "remove" conn ~actor:owner ~slug:"phrm-navail"
@@ -953,17 +1028,18 @@ let removal_unavailable_case =
       let* () = expect "already removed" "phrm-navail-home" in
       let* () = expect "replay after success" "phrm-navail-home" in
       let* rejected_status = status_of conn rid in
-      Alcotest.(check string) "rejected history intact" "rejected"
-        rejected_status;
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      Alcotest.(check string)
+        "rejected history intact" "rejected" rejected_status;
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "exactly the two historical rows" 2 total;
       Lwt.return_unit)
 
 (* === history and the active-home slot === *)
 
 let history_case =
-  db_case
-    "removal: history survives and the freed slot admits a fresh request"
+  db_case "removal: history survives and the freed slot admits a fresh request"
     (fun conn ->
       let* owner = insert_user conn "phrm_owner" in
       let* reviewer = insert_user conn "phrm_mod" in
@@ -978,7 +1054,10 @@ let history_case =
           ~community_id:cid ~community_slug:"phrm-history-home" ~note ()
       in
       let* before = stable_sig conn rid in
-      let* repos_before = find conn "repos" Connected_projects_fixture.q_count_repositories project in
+      let* repos_before =
+        find conn "repos" Connected_projects_fixture.q_count_repositories
+          project
+      in
       let* community_before =
         find conn "community sig" Home_request_fixture.q_community_sig cid
       in
@@ -987,15 +1066,19 @@ let history_case =
           ~community:"phrm-history-home"
       in
       let* () = check_removed "historical row" conn rid before in
-      let* repos_after = find conn "repos after" Connected_projects_fixture.q_count_repositories project in
+      let* repos_after =
+        find conn "repos after" Connected_projects_fixture.q_count_repositories
+          project
+      in
       Alcotest.(check int) "project content remains" repos_before repos_after;
       let* community_after =
         find conn "community sig after" Home_request_fixture.q_community_sig cid
       in
-      Alcotest.(check string) "community content remains" community_before
-        community_after;
+      Alcotest.(check string)
+        "community content remains" community_before community_after;
       let* active =
-        find conn "active" Home_request_fixture.q_count_active_for_project project
+        find conn "active" Home_request_fixture.q_count_active_for_project
+          project
       in
       Alcotest.(check int) "no active relation" 0 active;
       (* The project is still verified, so the freed slot immediately
@@ -1004,17 +1087,18 @@ let history_case =
         request_ok "fresh request after removal" conn ~user:owner
           ~slug:"phrm-history" ~community:cid ()
       in
-      let* () =
-        check_removed "removed history still intact" conn rid before
-      in
+      let* () = check_removed "removed history still intact" conn rid before in
       let* status2 = status_of conn rid2 in
-      Alcotest.(check string) "the new relation is a fresh pending row"
-        "pending" status2;
+      Alcotest.(check string)
+        "the new relation is a fresh pending row" "pending" status2;
       Alcotest.(check bool) "and a different row" true (rid2 <> rid);
-      let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+      let* total =
+        find conn "total" Home_request_fixture.q_count_for_project project
+      in
       Alcotest.(check int) "history plus the new request" 2 total;
       let* active =
-        find conn "active after" Home_request_fixture.q_count_active_for_project project
+        find conn "active after" Home_request_fixture.q_count_active_for_project
+          project
       in
       Alcotest.(check int) "exactly one active relation" 1 active;
       Lwt.return_unit)
@@ -1028,7 +1112,9 @@ let concurrent_removals_case =
       let* second = insert_user conn "phrm_steward2" in
       let* reviewer = insert_user conn "phrm_mod" in
       let* admin = insert_user conn "phrm_admin" in
-      let* () = exec conn "grant admin" Community_fixture.q_set_admin (admin, true) in
+      let* () =
+        exec conn "grant admin" Community_fixture.q_set_admin (admin, true)
+      in
       let* inst, project =
         make_project conn ~user:owner ~ext_id:947200011L ~slug:"phrm-race"
       in
@@ -1057,7 +1143,8 @@ let concurrent_removals_case =
               (status_str (Rm.resulting_status w));
             let* () = check_removed (label ^ ": one removal") conn rid before in
             let* active =
-              find conn "active" Home_request_fixture.q_count_active_for_project project
+              find conn "active" Home_request_fixture.q_count_active_for_project
+                project
             in
             Alcotest.(check int) (label ^ ": slot freed once") 0 active;
             Lwt.return_unit
@@ -1067,7 +1154,9 @@ let concurrent_removals_case =
           let* () = round "steward vs steward" ~a:owner ~b:second in
           let* () = round "steward vs top mod" ~a:owner ~b:reviewer in
           let* () = round "top mod vs durable admin" ~a:reviewer ~b:admin in
-          let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+          let* total =
+            find conn "total" Home_request_fixture.q_count_for_project project
+          in
           Alcotest.(check int) "one removed row per round" 3 total;
           Lwt.return_unit))
 
@@ -1081,7 +1170,9 @@ let revocation_race_case =
       let* reviewer = insert_user conn "phrm_mod" in
       let* mod2 = insert_user conn "phrm_mod2" in
       let* admin = insert_user conn "phrm_admin" in
-      let* () = exec conn "grant admin" Community_fixture.q_set_admin (admin, true) in
+      let* () =
+        exec conn "grant admin" Community_fixture.q_set_admin (admin, true)
+      in
       let* inst, project =
         make_project conn ~user:owner ~ext_id:947200012L ~slug:"phrm-revoke"
       in
@@ -1111,23 +1202,25 @@ let revocation_race_case =
             (match r with
             | Error Rm.Actor_unauthorized -> ()
             | Ok _ -> Alcotest.failf "%s: revoked actor removed" label
-            | Error e -> Alcotest.failf "%s: %s" label (Connected_projects_fixture.error_str e));
+            | Error e ->
+                Alcotest.failf "%s: %s" label
+                  (Connected_projects_fixture.error_str e));
             check_accepted_unchanged label conn rid before
           in
           (* Stewardship deletion. *)
           let* () =
             raced "steward deleted first"
               ~mutate:(fun () ->
-                exec conn2 "held steward deletion" Home_request_fixture.q_delete_steward
-                  (project, second))
+                exec conn2 "held steward deletion"
+                  Home_request_fixture.q_delete_steward (project, second))
               ~actor:second
           in
           (* Top-moderator downgrade, then removal. *)
           let* () =
             raced "top mod downgraded first"
               ~mutate:(fun () ->
-                exec conn2 "held downgrade" Community_fixture.q_set_moderator_role
-                  (mod2, cid, "mod"))
+                exec conn2 "held downgrade"
+                  Community_fixture.q_set_moderator_role (mod2, cid, "mod"))
               ~actor:mod2
           in
           let* () =
@@ -1137,15 +1230,16 @@ let revocation_race_case =
           let* () =
             raced "top mod removed first"
               ~mutate:(fun () ->
-                exec conn2 "held role removal" Community_fixture.q_remove_moderator
-                  (mod2, cid))
+                exec conn2 "held role removal"
+                  Community_fixture.q_remove_moderator (mod2, cid))
               ~actor:mod2
           in
           (* Durable admin revocation. *)
           let* () =
             raced "durable admin revoked first"
               ~mutate:(fun () ->
-                exec conn2 "held revocation" Community_fixture.q_set_admin (admin, false))
+                exec conn2 "held revocation" Community_fixture.q_set_admin
+                  (admin, false))
               ~actor:admin
           in
           (* No deadlock residue and no lost authority: the untouched
@@ -1188,17 +1282,20 @@ let request_race_case =
           in
           let request =
             Rq.create conn2 ~user_id:owner ~project_slug:"phrm-reqrace"
-              ~target_community_id:cid ~relation:(Home_request_fixture.phr_fresh_pending ())
+              ~target_community_id:cid
+              ~relation:(Home_request_fixture.phr_fresh_pending ())
           in
           let* removal_result, request_result = Lwt.both removal request in
           (* Both callers take the project row first, so only the two
              documented serialized outcomes are reachable. *)
           (match removal_result with
           | Ok removed ->
-              Alcotest.(check string) "removal result"
-                (status_str Phr.Removed)
+              Alcotest.(check string)
+                "removal result" (status_str Phr.Removed)
                 (status_str (Rm.resulting_status removed))
-          | Error e -> Alcotest.failf "removal lost the race: %s" (Connected_projects_fixture.error_str e));
+          | Error e ->
+              Alcotest.failf "removal lost the race: %s"
+                (Connected_projects_fixture.error_str e));
           let* () = check_removed "removed history" conn rid before in
           let* expected_total =
             match request_result with
@@ -1214,11 +1311,14 @@ let request_race_case =
                 Alcotest.failf "unexpected request outcome: %s"
                   (Home_request_fixture.error_str e)
           in
-          let* total = find conn "total" Home_request_fixture.q_count_for_project project in
-          Alcotest.(check int) "no lost history, no duplicate row"
-            expected_total total;
+          let* total =
+            find conn "total" Home_request_fixture.q_count_for_project project
+          in
+          Alcotest.(check int)
+            "no lost history, no duplicate row" expected_total total;
           let* active =
-            find conn "active" Home_request_fixture.q_count_active_for_project project
+            find conn "active" Home_request_fixture.q_count_active_for_project
+              project
           in
           Alcotest.(check bool) "at most one active relation" true (active <= 1);
           Lwt.return_unit))
@@ -1256,23 +1356,33 @@ let rollback_case =
       Lwt.finalize
         (fun () ->
           let* () =
-            remove_expect "poisoned removal" Rm.Storage_error conn
-              ~actor:owner ~slug:"phrm-fail" ~community:"phrm-fail-home"
+            remove_expect "poisoned removal" Rm.Storage_error conn ~actor:owner
+              ~slug:"phrm-fail" ~community:"phrm-fail-home"
           in
           let* () =
             check_accepted_unchanged "after injected failure" conn rid before
           in
-          let* members = find conn "members" Home_request_fixture.q_count_members cid in
+          let* members =
+            find conn "members" Home_request_fixture.q_count_members cid
+          in
           Alcotest.(check int) "no membership side effect" 0 members;
-          let* mods = find conn "moderators" Home_request_fixture.q_count_moderators cid in
+          let* mods =
+            find conn "moderators" Home_request_fixture.q_count_moderators cid
+          in
           Alcotest.(check int) "moderator roster untouched" 1 mods;
           let* stewards =
-            find conn "stewards" Home_request_fixture.q_count_stewards_for_project project
+            find conn "stewards"
+              Home_request_fixture.q_count_stewards_for_project project
           in
           Alcotest.(check int) "stewardship untouched" 1 stewards;
-          let* repos = find conn "repos" Connected_projects_fixture.q_count_repositories project in
+          let* repos =
+            find conn "repos" Connected_projects_fixture.q_count_repositories
+              project
+          in
           Alcotest.(check bool) "project content untouched" true (repos > 0);
-          let* total = find conn "total" Home_request_fixture.q_count_for_project project in
+          let* total =
+            find conn "total" Home_request_fixture.q_count_for_project project
+          in
           Alcotest.(check int) "no relation created or deleted" 1 total;
           Lwt.return_unit)
         (fun () ->
@@ -1282,8 +1392,7 @@ let rollback_case =
 (* === credential and privacy sweep === *)
 
 let privacy_case =
-  db_case "removal: no credential fixture reaches the removed row"
-    (fun conn ->
+  db_case "removal: no credential fixture reaches the removed row" (fun conn ->
       let* owner = insert_user conn "phrm_owner" in
       let* reviewer = insert_user conn "phrm_mod" in
       let* _, _project =
@@ -1292,18 +1401,19 @@ let privacy_case =
       let* cid = insert_community conn "phrm-creds-home" in
       let* () = add_top_mod conn ~user:reviewer ~community:cid in
       let credentials =
-        [ "phrm-access-token-A1x"
-        ; "phrm-refresh-token-B2x"
-        ; "phrm-authorization-code-C3x"
-        ; "phrm-pkce-verifier-D4x"
-        ; "phrm-client-secret-E5x"
-        ; "phrm-oauth-state-F6x"
-        ; "phrm-session-binding-G7x"
-        ; "947200999" (* installation id fixture *)
-        ; "947300999" (* account id fixture *)
-        ; "947600999" (* repository id fixture *)
-        ; "phrm-private-repo-name-H8x"
-        ; "phrm-private-repo-desc-I9x"
+        [
+          "phrm-access-token-A1x";
+          "phrm-refresh-token-B2x";
+          "phrm-authorization-code-C3x";
+          "phrm-pkce-verifier-D4x";
+          "phrm-client-secret-E5x";
+          "phrm-oauth-state-F6x";
+          "phrm-session-binding-G7x";
+          "947200999" (* installation id fixture *);
+          "947300999" (* account id fixture *);
+          "947600999" (* repository id fixture *);
+          "phrm-private-repo-name-H8x";
+          "phrm-private-repo-desc-I9x";
         ]
       in
       let* rid =
@@ -1315,10 +1425,13 @@ let privacy_case =
         remove_ok "remove" conn ~actor:owner ~slug:"phrm-creds"
           ~community:"phrm-creds-home"
       in
-      let* blob = find conn "row blob" Home_request_fixture.q_relation_text_blob rid in
+      let* blob =
+        find conn "row blob" Home_request_fixture.q_relation_text_blob rid
+      in
       List.iter
         (fun credential ->
-          Alcotest.(check bool) "credential absent from removed row" false
+          Alcotest.(check bool)
+            "credential absent from removed row" false
             (contains ~needle:credential blob))
         credentials;
       (* A credential-shaped value deliberately supplied as the private
@@ -1326,37 +1439,51 @@ let privacy_case =
          untouched. *)
       let deliberate = List.hd credentials in
       let* rid2 =
-        reviewed_home "deliberate note" conn ~owner ~reviewer
-          ~slug:"phrm-creds" ~community_id:cid
-          ~community_slug:"phrm-creds-home" ~note:deliberate ()
+        reviewed_home "deliberate note" conn ~owner ~reviewer ~slug:"phrm-creds"
+          ~community_id:cid ~community_slug:"phrm-creds-home" ~note:deliberate
+          ()
       in
       let* () =
         remove_ok "remove deliberate" conn ~actor:owner ~slug:"phrm-creds"
           ~community:"phrm-creds-home"
       in
       let* _, (_, (stored_note, _)) = relation_row conn rid2 in
-      Alcotest.(check bool) "deliberate note preserved verbatim" true
+      Alcotest.(check bool)
+        "deliberate note preserved verbatim" true
         (stored_note = Some deliberate);
       let* nonnote =
-        find conn "non-note blob" Home_request_fixture.q_relation_nonnote_blob rid2
+        find conn "non-note blob" Home_request_fixture.q_relation_nonnote_blob
+          rid2
       in
-      Alcotest.(check bool) "note value nowhere else in the row" false
+      Alcotest.(check bool)
+        "note value nowhere else in the row" false
         (contains ~needle:deliberate nonnote);
       Lwt.return_unit)
 
 let suite =
-  [ pure_inputs_case; steward_removal_case; steward_variants_case;
-    community_side_case; multiple_authority_case; unauthorized_case;
-    availability_case; corruption_case; removal_unavailable_case;
-    history_case; concurrent_removals_case; revocation_race_case;
-    request_race_case; rollback_case; privacy_case ]
+  [
+    pure_inputs_case;
+    steward_removal_case;
+    steward_variants_case;
+    community_side_case;
+    multiple_authority_case;
+    unauthorized_case;
+    availability_case;
+    corruption_case;
+    removal_unavailable_case;
+    history_case;
+    concurrent_removals_case;
+    revocation_race_case;
+    request_race_case;
+    rollback_case;
+    privacy_case;
+  ]
 
 let suites =
-    (* Accepted project-home removal: pure validation before SQL, the three
+  (* Accepted project-home removal: pure validation before SQL, the three
        durable authorization sources and their locking, lifecycle-drift
        tolerance, the exact removed row shape, the freed active-home slot,
        concurrency and authorization-revocation races, rollback, and the
        payload-free error and credential-privacy contracts.
        Database-gated. *)
-  [ ("project_home_removal_store", suite)
-  ]
+  [ ("project_home_removal_store", suite) ]

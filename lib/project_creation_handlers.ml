@@ -46,7 +46,8 @@ let authenticated_user_id request =
    origin-gated routes, and a no-referrer document makes the browser send
    Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -55,7 +56,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -95,8 +97,7 @@ let unavailable_page request =
     (Site_pages.msg_page ?user:(session_user request)
        ~title:"Temporarily Unavailable"
        ~message:
-         "Project creation is temporarily unavailable. Please try again \
-          later."
+         "Project creation is temporarily unavailable. Please try again later."
        ~alert_type:"error" ~return_url:"/projects/new" request)
 
 (* One generic 404 for every unavailable permanent project — nonexistent,
@@ -105,8 +106,8 @@ let unavailable_page request =
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 (* --- PRG targets, built structurally — never by concatenating request
    data. Only an owner-authorized draft id or a store-persisted canonical
@@ -124,7 +125,8 @@ let draft_redirect ~draft_id selection =
     (Uri.to_string
        (Uri.make ~path:"/projects/new"
           ~query:
-            [ ("draft", [ Int64.to_string draft_id ]);
+            [
+              ("draft", [ Int64.to_string draft_id ]);
               ("selection", [ selection ]);
             ]
           ()))
@@ -205,9 +207,7 @@ let identity_values_of_form form : Pages_ps.identity_values =
    passed so the re-rendered form carries a fresh Dream CSRF field. *)
 let respond_identity_page request ~status ~feedback ~values view =
   Dream.respond ~status ~headers:page_headers
-    (Pages_ps.project_setup_page
-       ?user:(session_user request)
-       ~request
+    (Pages_ps.project_setup_page ?user:(session_user request) ~request
        ~state:
          (Pages_ps.Configure_identity
             (identity_configuration_of_view ~values view))
@@ -244,9 +244,7 @@ let positive_int64_of_digits value =
    a strict positive decimal value. The id means nothing until
    load_available re-authorizes it for the current user. *)
 let recovered_draft_id fields =
-  match
-    List.filter (fun (name, _) -> String.equal name "draft_id") fields
-  with
+  match List.filter (fun (name, _) -> String.equal name "draft_id") fields with
   | [ (_, value) ] -> positive_int64_of_digits value
   | _ -> None
 
@@ -286,7 +284,8 @@ let handle_invalid_form request ~user_id fields =
 let handle_identity_error request ~draft_id ~form ~view error =
   let rerender feedback =
     respond_identity_page request ~status:(`Status 422) ~feedback
-      ~values:(identity_values_of_form form) view
+      ~values:(identity_values_of_form form)
+      view
   in
   match error with
   | Project_identity.Invalid_name -> rerender Pages_ps.Identity_name_invalid
@@ -316,7 +315,8 @@ let rerender_after_conflict request ~user_id ~draft_id ~form feedback =
   | Ok (Some view) ->
       if has_selection view then
         respond_identity_page request ~status:`Conflict ~feedback
-          ~values:(identity_values_of_form form) view
+          ~values:(identity_values_of_form form)
+          view
       else Lwt.return (draft_redirect ~draft_id "required")
 
 (* [identity] and [repository_count] are carried in for the success branch
@@ -412,17 +412,17 @@ let make_project_creation_handler ~mode ~load_config request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Lwt.return (login_redirect ())
-      | Some user_id ->
+      | Some user_id -> (
           let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             Lwt.return (bring_redirect ())
-          else (
+          else
             match load_config () with
             | Error _ -> unavailable_page request
-            | Ok config ->
-                if not (Request_origin.same_origin_request config request)
-                then forbidden_page request
-                else (
+            | Ok config -> (
+                if not (Request_origin.same_origin_request config request) then
+                  forbidden_page request
+                else
                   (* Dream's form API enforces the URL-encoded content type
                      and verifies its own CSRF field, which it strips from
                      the returned fields — so the strict parser below sees
@@ -486,11 +486,11 @@ let make_project_home_setup_handler ~mode request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Lwt.return (login_redirect ())
-      | Some user_id ->
+      | Some user_id -> (
           let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             Lwt.return (bring_redirect ())
-          else (
+          else
             match route_slug request with
             | None -> not_found_page request
             | Some slug -> (
@@ -511,7 +511,6 @@ let make_project_home_setup_handler ~mode request =
                 | Ok (Some project) ->
                     Dream.respond ~status:`OK ~headers:page_headers
                       (Pages_home.project_home_setup_page
-                         ?user:(session_user request)
-                         ~request
+                         ?user:(session_user request) ~request
                          ~project:(home_project_of_read project)
                          ()))))

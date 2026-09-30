@@ -51,7 +51,8 @@ let authenticated_user_id request =
    origin-gated routes, and a no-referrer document makes the browser send
    Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -60,7 +61,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -99,8 +101,7 @@ let unavailable_page request =
   Dream.respond ~status:`Service_Unavailable ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request)
        ~title:"Temporarily Unavailable"
-       ~message:
-         "Reviewing is temporarily unavailable. Please try again later."
+       ~message:"Reviewing is temporarily unavailable. Please try again later."
        ~alert_type:"error" ~return_url:"/" request)
 
 (* One generic 404 for every unavailable queue — missing community,
@@ -111,8 +112,8 @@ let unavailable_page request =
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 (* The PRG destination is the queue route, rebuilt structurally from the
    canonical community slug — never by reflecting other request data, and
@@ -214,12 +215,16 @@ let load_launch_shell request ~user_id ~canonical_slug =
         match%lwt Community_store.get_community_by_slug db canonical_slug with
         | Ok (Some community) ->
             let%lwt channels =
-              match%lwt Channel_store.get_channels_by_community db community.id with
+              match%lwt
+                Channel_store.get_channels_by_community db community.id
+              with
               | Ok channels -> Lwt.return channels
               | Error _ -> Lwt.return []
             in
             let%lwt sections =
-              match%lwt Section_store.get_sections_by_community db community.id with
+              match%lwt
+                Section_store.get_sections_by_community db community.id
+              with
               | Ok sections -> Lwt.return sections
               | Error _ -> Lwt.return []
             in
@@ -229,8 +234,8 @@ let load_launch_shell request ~user_id ~canonical_slug =
               | Error _ -> Lwt.return []
             in
             let sidebar =
-              Community_pages.launch_knowledge_sidebar ~community ~channels ~sections
-                ~settings_active:true ~show_visibility_note:false
+              Community_pages.launch_knowledge_sidebar ~community ~channels
+                ~sections ~settings_active:true ~show_visibility_note:false
                 ~can_manage:true ()
             in
             Lwt.return
@@ -297,8 +302,8 @@ let make_project_home_review_queue_handler ~mode request =
       | Some community_slug ->
           (* Informational: no locks, no state change, no query parameters,
              no flash state. *)
-          respond_current_queue request ~user_id ~community_slug
-            ~feedback:None ~status:`OK)
+          respond_current_queue request ~user_id ~community_slug ~feedback:None
+            ~status:`OK)
 
 (* --- Store-result mapping ---
 
@@ -401,15 +406,17 @@ let handle_review_result request ~decision ~user_id ~community_slug = function
    model. *)
 let make_review_post_handler ~decision ~mode ~load_config request =
   with_gates ~mode request (fun ~user_id ->
-      match (route_param request "slug", route_param request "project_slug") with
+      match
+        (route_param request "slug", route_param request "project_slug")
+      with
       | None, _ | _, None -> not_found_page request
       | Some community_slug, Some project_slug -> (
           match load_config () with
           | Error _ -> unavailable_page request
-          | Ok config ->
+          | Ok config -> (
               if not (Request_origin.same_origin_request config request) then
                 forbidden_page request
-              else (
+              else
                 (* Dream's form API enforces the URL-encoded content type
                    and verifies its own CSRF field, which it strips from
                    the returned fields.

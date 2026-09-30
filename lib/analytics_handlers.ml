@@ -72,7 +72,9 @@ let analytics_consent_handler request =
         | `Granted -> consent_grant_person_sync request
         | `Denied -> Lwt.return_unit
       in
-      let value = match state with `Granted -> "granted" | `Denied -> "denied" in
+      let value =
+        match state with `Granted -> "granted" | `Denied -> "denied"
+      in
       let response = Dream.response ~status:`No_Content "" in
       (* Plaintext (encrypt:false) and no HttpOnly: the §9 contract requires
          document.cookie readability (the prerendered landing can determine
@@ -94,7 +96,7 @@ let analytics_consent_method_not_allowed _request =
     ~headers:[ ("Allow", "POST") ]
     {|{"error":"method not allowed"}|}
 
-(* Step-6 domain events: a success path inside a Dream.sql block RECORDS its
+(* Domain events: a success path inside a Dream.sql block RECORDS its
    emission; the recorded thunk runs only after the block returns and its
    pooled connection is released, so the fire-and-forget analytics HTTP never
    overlaps a checked-out DB connection. Nothing recorded ⇒ nothing emitted,
@@ -114,19 +116,23 @@ let with_analytics_after_sql make_response =
    visibility comes from the authoritative community record the handler
    already loaded; no analytics-only DB query exists. *)
 let analytics_public_string (community : Community_types.community) value =
-  if Community_types.community_is_private community.Community_types.visibility then None else Some value
+  if Community_types.community_is_private community.Community_types.visibility
+  then None
+  else Some value
 
 (* The closed $groupidentify record from an authoritative Community_types.community row.
    The shared community record carries no created_at column, so that optional
    group property is omitted rather than approximated. Private communities:
    slug and name are None (§13), id and closed visibility remain. *)
-let community_group_of (community : Community_types.community) : Analytics.community_group =
+let community_group_of (community : Community_types.community) :
+    Analytics.community_group =
   {
     Analytics.community_id = community.id;
     community_slug = analytics_public_string community community.slug;
     community_name = analytics_public_string community community.name;
     community_visibility =
-      Community_types.community_visibility_to_string community.Community_types.visibility;
+      Community_types.community_visibility_to_string
+        community.Community_types.visibility;
     created_at = None;
   }
 
@@ -139,7 +145,8 @@ let attempt_posthog_group_cleanup_job request ~job_id =
   Lwt.catch
     (fun () ->
       let%lwt claimed =
-        Dream.sql request (fun db -> Posthog_group_cleanup_job_store.claim db job_id)
+        Dream.sql request (fun db ->
+            Posthog_group_cleanup_job_store.claim db job_id)
       in
       match claimed with
       | Ok (Some group_key) ->

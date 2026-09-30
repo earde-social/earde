@@ -24,25 +24,33 @@ let case = Case.quick
 
 let off_case =
   case "Off: controlled 404, loader and cookies untouched" (fun () ->
-      let loader, calls = Http_fixture.counting_loader (Http_fixture.ok_loader ()) in
+      let loader, calls =
+        Http_fixture.counting_loader (Http_fixture.ok_loader ())
+      in
       let response =
         Http_fixture.gate_response "off"
-          (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in ~mode:Ob.Off ~load_config:loader ())
+          (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in
+             ~mode:Ob.Off ~load_config:loader ())
       in
       Alcotest.(check int) "404" 404 (Http_fixture.status_of response);
       Alcotest.(check int) "loader never called" 0 !calls;
-      Alcotest.(check int) "no flow cookie" 0
+      Alcotest.(check int)
+        "no flow cookie" 0
         (List.length (Github_handler_fixture.flow_cookies response)))
 
 let anonymous_case =
   case "Public: anonymous POST redirects to /login" (fun () ->
-      let loader, calls = Http_fixture.counting_loader (Http_fixture.ok_loader ()) in
+      let loader, calls =
+        Http_fixture.counting_loader (Http_fixture.ok_loader ())
+      in
       let response =
         Http_fixture.gate_response "anonymous"
-          (Github_handler_fixture.gate_run ~mode:Ob.Public ~load_config:loader ())
+          (Github_handler_fixture.gate_run ~mode:Ob.Public ~load_config:loader
+             ())
       in
       Alcotest.(check int) "redirect" 303 (Http_fixture.status_of response);
-      Alcotest.(check (option string)) "to /login" (Some "/login")
+      Alcotest.(check (option string))
+        "to /login" (Some "/login")
         (Dream.header response "Location");
       Alcotest.(check int) "loader never called" 0 !calls)
 
@@ -58,37 +66,45 @@ let malformed_session_case =
                  ~load_config:(fun () -> Http_fixture.ok_loader ())
                  ())
           in
-          Alcotest.(check (option string)) "to /login" (Some "/login")
+          Alcotest.(check (option string))
+            "to /login" (Some "/login")
             (Dream.header response "Location"))
         [ "not-a-number"; ""; "0"; "-3" ])
 
 let admins_non_admin_case =
-  case "Admins: authenticated non-admin is 403, loader untouched"
-    (fun () ->
-      let loader, calls = Http_fixture.counting_loader (Http_fixture.ok_loader ()) in
+  case "Admins: authenticated non-admin is 403, loader untouched" (fun () ->
+      let loader, calls =
+        Http_fixture.counting_loader (Http_fixture.ok_loader ())
+      in
       List.iter
         (fun session ->
           let response =
             Http_fixture.gate_response "non-admin"
-              (Github_handler_fixture.gate_run ~session ~mode:Ob.Admins ~load_config:loader ())
+              (Github_handler_fixture.gate_run ~session ~mode:Ob.Admins
+                 ~load_config:loader ())
           in
           Alcotest.(check int) "403" 403 (Http_fixture.status_of response))
-        [ Http_fixture.logged_in; Http_fixture.logged_in @ [ ("is_admin", "false") ] ];
+        [
+          Http_fixture.logged_in;
+          Http_fixture.logged_in @ [ ("is_admin", "false") ];
+        ];
       Alcotest.(check int) "loader never called" 0 !calls)
 
 let config_failure_case =
   case "Public: configuration error is a generic 503" (fun () ->
       let loader, calls =
-        Http_fixture.counting_loader (Github_fixture.gac_of_values ~origin:None ())
+        Http_fixture.counting_loader
+          (Github_fixture.gac_of_values ~origin:None ())
       in
       let response =
         Http_fixture.gate_response "config failure"
-          (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in ~mode:Ob.Public ~load_config:loader
-             ())
+          (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in
+             ~mode:Ob.Public ~load_config:loader ())
       in
       Alcotest.(check int) "503" 503 (Http_fixture.status_of response);
       Alcotest.(check int) "loader called once" 1 !calls;
-      Alcotest.(check int) "no flow cookie" 0
+      Alcotest.(check int)
+        "no flow cookie" 0
         (List.length (Github_handler_fixture.flow_cookies response));
       let body = Lwt_main.run (Dream.body response) in
       List.iter
@@ -110,7 +126,8 @@ let origin_rejected label ?(sec_fetch_site = None) origin =
   in
   let response =
     Http_fixture.gate_response label
-      (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in ~headers ~mode:Ob.Public
+      (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in ~headers
+         ~mode:Ob.Public
          ~load_config:(fun () -> Http_fixture.ok_loader ())
          ())
   in
@@ -137,11 +154,9 @@ let malformed_origin_case =
       origin_rejected "query" (Some "https://earde.com?x=1"))
 
 let origin_beats_fetch_site_case =
-  case "origin gate: mismatching Origin loses to Sec-Fetch-Site"
-    (fun () ->
+  case "origin gate: mismatching Origin loses to Sec-Fetch-Site" (fun () ->
       origin_rejected "mismatch + same-origin"
-        ~sec_fetch_site:(Some "same-origin")
-        (Some "https://evil.example");
+        ~sec_fetch_site:(Some "same-origin") (Some "https://evil.example");
       origin_rejected "malformed + same-origin"
         ~sec_fetch_site:(Some "same-origin") (Some "null"))
 
@@ -170,8 +185,7 @@ let matching_origin_case =
            ()))
 
 let fetch_metadata_pass_case =
-  case "origin gate: no Origin + Sec-Fetch-Site same-origin passes"
-    (fun () ->
+  case "origin gate: no Origin + Sec-Fetch-Site same-origin passes" (fun () ->
       Http_fixture.check_db_boundary "fetch metadata"
         (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in
            ~headers:[ ("Sec-Fetch-Site", "same-origin") ]
@@ -180,17 +194,27 @@ let fetch_metadata_pass_case =
            ()))
 
 let gate_suite =
-  [ off_case; anonymous_case; malformed_session_case;
-    admins_non_admin_case; config_failure_case; cross_origin_case;
-    malformed_origin_case; origin_beats_fetch_site_case;
-    missing_signals_case; matching_origin_case; fetch_metadata_pass_case ]
+  [
+    off_case;
+    anonymous_case;
+    malformed_session_case;
+    admins_non_admin_case;
+    config_failure_case;
+    cross_origin_case;
+    malformed_origin_case;
+    origin_beats_fetch_site_case;
+    missing_signals_case;
+    matching_origin_case;
+    fetch_metadata_pass_case;
+  ]
 
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM github_onboarding_states WHERE user_id IN \
-       (SELECT id FROM users WHERE username LIKE 'ghstart_%')"
-    ; "DELETE FROM users WHERE username LIKE 'ghstart_%'"
+    [
+      "DELETE FROM github_onboarding_states WHERE user_id IN (SELECT id FROM \
+       users WHERE username LIKE 'ghstart_%')";
+      "DELETE FROM users WHERE username LIKE 'ghstart_%'";
     ]
 
 let db_case name f =
@@ -213,25 +237,24 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_absent_user_id =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
 
 (* Everything stored for one issued state, keyed by its lookup hash. *)
 let q_row_by_state_hash =
-  (Caqti_type.(string ->* t2 (t3 int string string) (t3 bool bool float)))
-  "SELECT user_id, session_binding_hash, flow,
-          pending_github_installation_id IS NULL,
-          consumed_at IS NULL,
-          EXTRACT(EPOCH FROM (expires_at - created_at))::float8
-   FROM github_onboarding_states WHERE state_hash = $1"
+  Caqti_type.(string ->* t2 (t3 int string string) (t3 bool bool float))
+    "SELECT user_id, session_binding_hash, flow,\n\
+    \          pending_github_installation_id IS NULL,\n\
+    \          consumed_at IS NULL,\n\
+    \          EXTRACT(EPOCH FROM (expires_at - created_at))::float8\n\
+    \   FROM github_onboarding_states WHERE state_hash = $1"
 
 let q_count_for_user =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM github_onboarding_states WHERE user_id = $1"
+    "SELECT COUNT(*) FROM github_onboarding_states WHERE user_id = $1"
 
 (* The stored row for a state, as (binding_hash, all text columns). *)
 let row_of_state (module C : Caqti_lwt.CONNECTION) label ~uid state =
@@ -239,20 +262,21 @@ let row_of_state (module C : Caqti_lwt.CONNECTION) label ~uid state =
   let* rows = C.collect_list q_row_by_state_hash state_hash in
   let* rows = Github_handler_fixture.or_fail (label ^ ": row") rows in
   match rows with
-  | [ ( (row_uid, binding_hash, flow),
-        (pending_null, consumed_null, ttl) ) ] ->
-      Alcotest.(check int) (label ^ ": row belongs to the session user")
+  | [ ((row_uid, binding_hash, flow), (pending_null, consumed_null, ttl)) ] ->
+      Alcotest.(check int)
+        (label ^ ": row belongs to the session user")
         uid row_uid;
       Alcotest.(check string) (label ^ ": flow") "project_onboarding" flow;
-      Alcotest.(check bool) (label ^ ": pending installation NULL") true
-        pending_null;
-      Alcotest.(check bool) (label ^ ": consumed_at NULL") true
-        consumed_null;
-      Alcotest.(check bool) (label ^ ": expiry ~15 minutes") true
+      Alcotest.(check bool)
+        (label ^ ": pending installation NULL")
+        true pending_null;
+      Alcotest.(check bool) (label ^ ": consumed_at NULL") true consumed_null;
+      Alcotest.(check bool)
+        (label ^ ": expiry ~15 minutes")
+        true
         (Float.abs (ttl -. 900.) <= 5.);
       Lwt.return
-        ( binding_hash,
-          String.concat "|" [ state_hash; binding_hash; flow ] )
+        (binding_hash, String.concat "|" [ state_hash; binding_hash; flow ])
   | rows ->
       Alcotest.failf "%s: expected exactly one row, found %d" label
         (List.length rows)
@@ -263,38 +287,50 @@ let success_case =
       let* uid = C.find Github_handler_fixture.q_insert_user "ghstart_user" in
       let* uid = Github_handler_fixture.or_fail "user" uid in
       let config = Github_fixture.gck_https_config () in
-      let* response = Github_handler_fixture.run_start ~url ~session_user_id:uid in
+      let* response =
+        Github_handler_fixture.run_start ~url ~session_user_id:uid
+      in
       let location, state, name, value =
         Github_handler_fixture.successful_start "start" response
       in
-      Alcotest.(check bool) "Location is exactly installation_url" true
+      Alcotest.(check bool)
+        "Location is exactly installation_url" true
         (String.equal location (GOU.installation_url config ~state));
       let* stored_binding_hash, text_columns =
         row_of_state (module C) "start" ~uid state
       in
-      Alcotest.(check string) "browser-visible name derives from the state"
+      Alcotest.(check string)
+        "browser-visible name derives from the state"
         ("__Secure-" ^ GSD.cookie_name state)
         name;
-      let* loaded = Github_handler_fixture.load_cookie config state [ (name, value) ] in
-      Alcotest.(check bool) "cookie binding hash matches the stored row"
-        true
-        (String.equal (Github_fixture.gsd_binding_hash loaded) stored_binding_hash);
+      let* loaded =
+        Github_handler_fixture.load_cookie config state [ (name, value) ]
+      in
+      Alcotest.(check bool)
+        "cookie binding hash matches the stored row" true
+        (String.equal
+           (Github_fixture.gsd_binding_hash loaded)
+           stored_binding_hash);
       let verifier =
         match GPK.verifier_of_string (Github_fixture.gsd_verifier loaded) with
         | Ok v -> v
         | Error GPK.Invalid_format ->
             Alcotest.fail "cookie verifier is not canonical"
       in
-      Alcotest.(check bool) "challenge is S256 of the verifier" true
-        (String.equal (Github_fixture.gsd_challenge loaded)
+      Alcotest.(check bool)
+        "challenge is S256 of the verifier" true
+        (String.equal
+           (Github_fixture.gsd_challenge loaded)
            (GPK.challenge_to_string (GPK.challenge_of_verifier verifier)));
       (* Only hashes cross the SQL boundary: neither raw token from the
          cookie plaintext appears in any stored text column. *)
       (match String.split_on_char '.' (GSD.encode loaded) with
       | [ _version; raw_binding; raw_verifier ] ->
-          Alcotest.(check bool) "raw binding absent from the row" false
+          Alcotest.(check bool)
+            "raw binding absent from the row" false
             (Html_assert.contains_nonempty ~needle:raw_binding text_columns);
-          Alcotest.(check bool) "raw verifier absent from the row" false
+          Alcotest.(check bool)
+            "raw verifier absent from the row" false
             (Html_assert.contains_nonempty ~needle:raw_verifier text_columns)
       | _ -> Alcotest.fail "unexpected cookie plaintext shape");
       Lwt.return_unit)
@@ -306,11 +342,15 @@ let storage_failure_case =
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* ghost = C.find q_absent_user_id () in
       let* ghost = Github_handler_fixture.or_fail "absent user id" ghost in
-      let* response = Github_handler_fixture.run_start ~url ~session_user_id:ghost in
+      let* response =
+        Github_handler_fixture.run_start ~url ~session_user_id:ghost
+      in
       Alcotest.(check int) "503" 503 (Http_fixture.status_of response);
-      Alcotest.(check (option string)) "no Location" None
+      Alcotest.(check (option string))
+        "no Location" None
         (Dream.header response "Location");
-      Alcotest.(check int) "no flow cookie" 0
+      Alcotest.(check int)
+        "no flow cookie" 0
         (List.length (Github_handler_fixture.flow_cookies response));
       let* count = C.find q_count_for_user ghost in
       let* count = Github_handler_fixture.or_fail "count" count in
@@ -324,17 +364,23 @@ let multiple_starts_case =
       let* uid = Github_handler_fixture.or_fail "user" uid in
       let config = Github_fixture.gck_https_config () in
       let start label =
-        let* response = Github_handler_fixture.run_start ~url ~session_user_id:uid in
-        let _, state, name, value = Github_handler_fixture.successful_start label response in
+        let* response =
+          Github_handler_fixture.run_start ~url ~session_user_id:uid
+        in
+        let _, state, name, value =
+          Github_handler_fixture.successful_start label response
+        in
         Lwt.return (state, name, value)
       in
       let* state_a, name_a, value_a = start "first" in
       let* state_b, name_b, value_b = start "second" in
-      Alcotest.(check bool) "distinct state rows" false
+      Alcotest.(check bool)
+        "distinct state rows" false
         (String.equal
            (GOC.state_hash_to_string (GOC.hash_state state_a))
            (GOC.state_hash_to_string (GOC.hash_state state_b)));
-      Alcotest.(check bool) "distinct cookie names" false
+      Alcotest.(check bool)
+        "distinct cookie names" false
         (String.equal name_a name_b);
       let* count = C.find q_count_for_user uid in
       let* count = Github_handler_fixture.or_fail "count" count in
@@ -347,11 +393,14 @@ let multiple_starts_case =
       let* loaded_b = Github_handler_fixture.load_cookie config state_b jar in
       let* binding_a, _ = row_of_state (module C) "row A" ~uid state_a in
       let* binding_b, _ = row_of_state (module C) "row B" ~uid state_b in
-      Alcotest.(check bool) "A bound to its row" true
+      Alcotest.(check bool)
+        "A bound to its row" true
         (String.equal (Github_fixture.gsd_binding_hash loaded_a) binding_a);
-      Alcotest.(check bool) "B bound to its row" true
+      Alcotest.(check bool)
+        "B bound to its row" true
         (String.equal (Github_fixture.gsd_binding_hash loaded_b) binding_b);
-      Alcotest.(check bool) "flows use distinct bindings" false
+      Alcotest.(check bool)
+        "flows use distinct bindings" false
         (String.equal binding_a binding_b);
       Lwt.return_unit)
 
@@ -368,9 +417,13 @@ let multiple_starts_case =
    cookie. *)
 let run_start_with_cookies ~url ~session_user_id ~cookies ?(mode = Ob.Public)
     ?(origin = Some "https://earde.com") () =
-  let handler = Github_handler_fixture.make_start_handler ~mode ~load_config:(fun () -> Http_fixture.ok_loader ()) in
+  let handler =
+    Github_handler_fixture.make_start_handler ~mode ~load_config:(fun () ->
+        Http_fixture.ok_loader ())
+  in
   let pipeline =
-    Dream.sql_pool url @@ Dream.set_secret Github_fixture.cookie_secret
+    Dream.sql_pool url
+    @@ Dream.set_secret Github_fixture.cookie_secret
     @@ Dream.memory_sessions
     @@ fun req ->
     let* () =
@@ -380,25 +433,33 @@ let run_start_with_cookies ~url ~session_user_id ~cookies ?(mode = Ob.Public)
   in
   let headers =
     (match origin with Some o -> [ ("Origin", o) ] | None -> [])
-    @ match cookies with [] -> [] | c -> [ ("Cookie", Github_fixture.gck_cookie_header c) ]
+    @
+    match cookies with
+    | [] -> []
+    | c -> [ ("Cookie", Github_fixture.gck_cookie_header c) ]
   in
-  pipeline (Dream.request ~method_:`POST ~target:Github_handler_fixture.target ~headers "")
+  pipeline
+    (Dream.request ~method_:`POST ~target:Github_handler_fixture.target ~headers
+       "")
 
 let analytics_success_case =
   db_case
     "analytics: a successful start captures exactly one \
      github_app_install_started, after the state row and with no GitHub \
-     material"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     material" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = C.find Github_handler_fixture.q_insert_user "ghstart_an_ok" in
       let* uid = Github_handler_fixture.or_fail "user" uid in
       let* response, captured =
         Analytics_fixture.with_sink_lwt (fun () ->
             run_start_with_cookies ~url ~session_user_id:uid
-              ~cookies:[ Analytics_fixture.an_consent_granted ] ())
+              ~cookies:[ Analytics_fixture.an_consent_granted ]
+              ())
       in
-      let _ = Github_handler_fixture.successful_start "analytics start" response in
-      Analytics_fixture.check_single_capture "granted" ~name:"github_app_install_started"
+      let _ =
+        Github_handler_fixture.successful_start "analytics start" response
+      in
+      Analytics_fixture.check_single_capture "granted"
+        ~name:"github_app_install_started"
         ~distinct_id:(Printf.sprintf "user:%d" uid)
         ~props:[ ("user_id", `Int uid) ]
         captured;
@@ -411,10 +472,12 @@ let analytics_success_case =
 
 let analytics_consent_case =
   db_case
-    "analytics: denied, missing, and disabled configurations capture \
-     nothing while the redirect and the state row are unchanged"
+    "analytics: denied, missing, and disabled configurations capture nothing \
+     while the redirect and the state row are unchanged"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-      let* uid = C.find Github_handler_fixture.q_insert_user "ghstart_an_consent" in
+      let* uid =
+        C.find Github_handler_fixture.q_insert_user "ghstart_an_consent"
+      in
       let* uid = Github_handler_fixture.or_fail "user" uid in
       let run label ?(enabled = true) cookies =
         let* response, captured =
@@ -430,7 +493,10 @@ let analytics_consent_case =
       let* () = run "missing" [] in
       let* () = run "unrelated cookies" [ ("theme", "dark") ] in
       let* () = run "malformed value" [ (An.consent_cookie_name, "yes") ] in
-      let* () = run "analytics disabled" ~enabled:false [ Analytics_fixture.an_consent_granted ] in
+      let* () =
+        run "analytics disabled" ~enabled:false
+          [ Analytics_fixture.an_consent_granted ]
+      in
       let* count = C.find q_count_for_user uid in
       let* count = Github_handler_fixture.or_fail "count" count in
       Alcotest.(check int) "five successful starts, five rows" 5 count;
@@ -439,26 +505,31 @@ let analytics_consent_case =
 let analytics_no_event_case =
   db_case
     "analytics: every refused or failed start captures nothing, even with \
-     granted consent"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     granted consent" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* ghost = C.find q_absent_user_id () in
       let* ghost = Github_handler_fixture.or_fail "absent user id" ghost in
-      let* uid = C.find Github_handler_fixture.q_insert_user "ghstart_an_none" in
+      let* uid =
+        C.find Github_handler_fixture.q_insert_user "ghstart_an_none"
+      in
       let* uid = Github_handler_fixture.or_fail "user" uid in
       (* Storage failure: the state row never commits, so no redirect and
          no event. *)
       let* response, captured =
         Analytics_fixture.with_sink_lwt (fun () ->
             run_start_with_cookies ~url ~session_user_id:ghost
-              ~cookies:[ Analytics_fixture.an_consent_granted ] ())
+              ~cookies:[ Analytics_fixture.an_consent_granted ]
+              ())
       in
-      Alcotest.(check int) "storage failure 503" 503 (Http_fixture.status_of response);
+      Alcotest.(check int)
+        "storage failure 503" 503
+        (Http_fixture.status_of response);
       Analytics_fixture.check_no_capture "storage failure" captured;
       (* Rollout gate: a non-admin in Admins mode never reaches issuance. *)
       let* response, captured =
         Analytics_fixture.with_sink_lwt (fun () ->
             run_start_with_cookies ~url ~session_user_id:uid
-              ~cookies:[ Analytics_fixture.an_consent_granted ] ~mode:Ob.Admins ())
+              ~cookies:[ Analytics_fixture.an_consent_granted ]
+              ~mode:Ob.Admins ())
       in
       Alcotest.(check int) "rollout 403" 403 (Http_fixture.status_of response);
       Analytics_fixture.check_no_capture "rollout gate" captured;
@@ -466,7 +537,8 @@ let analytics_no_event_case =
       let* response, captured =
         Analytics_fixture.with_sink_lwt (fun () ->
             run_start_with_cookies ~url ~session_user_id:uid
-              ~cookies:[ Analytics_fixture.an_consent_granted ] ~mode:Ob.Off ())
+              ~cookies:[ Analytics_fixture.an_consent_granted ]
+              ~mode:Ob.Off ())
       in
       Alcotest.(check int) "off 404" 404 (Http_fixture.status_of response);
       Analytics_fixture.check_no_capture "kill switch" captured;
@@ -474,10 +546,12 @@ let analytics_no_event_case =
       let* response, captured =
         Analytics_fixture.with_sink_lwt (fun () ->
             run_start_with_cookies ~url ~session_user_id:uid
-              ~cookies:[ Analytics_fixture.an_consent_granted ] ~origin:(Some "https://evil.example")
-              ())
+              ~cookies:[ Analytics_fixture.an_consent_granted ]
+              ~origin:(Some "https://evil.example") ())
       in
-      Alcotest.(check int) "cross-origin 403" 403 (Http_fixture.status_of response);
+      Alcotest.(check int)
+        "cross-origin 403" 403
+        (Http_fixture.status_of response);
       Analytics_fixture.check_no_capture "origin gate" captured;
       let* count = C.find q_count_for_user uid in
       let* count = Github_handler_fixture.or_fail "count" count in
@@ -485,16 +559,22 @@ let analytics_no_event_case =
       Lwt.return_unit)
 
 let db_suite =
-  [ success_case; storage_failure_case; multiple_starts_case;
-    analytics_success_case; analytics_consent_case; analytics_no_event_case
+  [
+    success_case;
+    storage_failure_case;
+    multiple_starts_case;
+    analytics_success_case;
+    analytics_consent_case;
+    analytics_no_event_case;
   ]
 
 let suites =
-    (* Start-installation handler gates: DB-free with injected mode and
+  (* Start-installation handler gates: DB-free with injected mode and
        config — rejections must produce controlled statuses without
        configuration reads, SQL, or cookies. *)
-  [ ( "github_start_handler_gates", gate_suite )
+  [
+    ("github_start_handler_gates", gate_suite)
     (* Start-installation handler over the real pipeline (sql_pool +
-       secret + memory sessions); EARDE_TEST_DATABASE_URL gate. *)
-  ; ( "github_start_handler_db", db_suite )
+       secret + memory sessions); EARDE_TEST_DATABASE_URL gate. *);
+    ("github_start_handler_db", db_suite);
   ]

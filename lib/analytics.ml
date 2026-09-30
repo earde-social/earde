@@ -109,7 +109,7 @@ type event =
       promoted_participant_count : int option;
     }
   | Account_deleted
-      (* Personless aggregate deletion counter (§3.3): carries NO user_id, no
+  (* Personless aggregate deletion counter (§3.3): carries NO user_id, no
          person, no group. Person processing is disabled on the payload, so it
          can never be associated with (or recreate) the person the deletion
          job is about to remove. *)
@@ -121,23 +121,23 @@ type event =
      acting user (already the distinct id) and, where an existing public
      accessor supplies it, the permanent Earde project id. *)
   | Github_app_install_started of { user_id : int }
-      (* The authenticated, rollout- and origin-authorized start of a GitHub
+    (* The authenticated, rollout- and origin-authorized start of a GitHub
          App installation, after the durable onboarding state row committed
          and the browser is about to be redirected to GitHub. *)
   | Github_app_installed of { user_id : int }
-      (* The OAuth callback completed: state validated and consumed, the
+    (* The OAuth callback completed: state validated and consumed, the
          installation verified against the GitHub user, and the installation
          record plus refreshed draft committed. The verified installation id,
          account id and login stay behind in the handler. *)
   | Github_repositories_selected of { user_id : int; repository_count : int }
   | Github_project_created of {
       user_id : int;
-      project_id : int64;  (* the permanent open_source_projects row id *)
+      project_id : int64; (* the permanent open_source_projects row id *)
       project_kind : Project_identity.kind;
       repository_count : int;
     }
   | Dedicated_home_provisioned of { user_id : int }
-      (* The private setup draft, its initial role/shell, the accepted home
+    (* The private setup draft, its initial role/shell, the accepted home
          relation and the audit event all committed. Deliberately NOT
          "community_published": nothing is public yet. *)
   | Network_community_published of {
@@ -147,7 +147,7 @@ type event =
     }
   | Project_home_request_submitted of { user_id : int }
   | Project_home_request_reviewed of {
-      user_id : int;  (* the reviewing moderator, not the requesting steward *)
+      user_id : int; (* the reviewing moderator, not the requesting steward *)
       decision : review_decision;
     }
   | Project_home_removed of { user_id : int; removal_surface : removal_surface }
@@ -160,7 +160,8 @@ let distinct_id_of_user_id user_id = Printf.sprintf "user:%d" user_id
 let account_deletion_distinct_id = "system:account-deletion"
 
 (* Group keys use the immutable numeric id — slugs are mutable (§5.3). *)
-let community_group_key community_id = Printf.sprintf "community:%d" community_id
+let community_group_key community_id =
+  Printf.sprintf "community:%d" community_id
 
 (* "community" is the project's first (and only) PostHog group type (§5.3),
    so its group_type_index is 0. Used by the §13 private Groups-API cleanup. *)
@@ -198,7 +199,6 @@ let ui_host_env = "POSTHOG_UI_HOST"
 let project_id_env = "POSTHOG_PROJECT_ID"
 let personal_api_key_env = "POSTHOG_PERSONAL_API_KEY"
 let public_origin_env = "EARDE_PUBLIC_ORIGIN"
-
 let default_api_host = "https://eu.i.posthog.com"
 let default_ui_host = "https://eu.posthog.com"
 
@@ -244,9 +244,10 @@ let is_positive_int s =
 let is_local_origin origin =
   let uri = Uri.of_string origin in
   (match Uri.scheme uri with Some "http" | Some "https" -> true | _ -> false)
-  && (match Uri.host uri with
-     | Some ("localhost" | "127.0.0.1" | "::1") -> true
-     | _ -> false)
+  &&
+  match Uri.host uri with
+  | Some ("localhost" | "127.0.0.1" | "::1") -> true
+  | _ -> false
 
 (* Pure fail-closed resolution of the raw environment values. Returns the
    resolved config plus startup diagnostics (variable NAMES and requirements
@@ -303,7 +304,9 @@ let validate_configuration ~enabled ~environment ~allow_development
       public_origin;
     }
   in
-  let disabled diagnostics = (base ~enabled:false ~project_token:"", diagnostics) in
+  let disabled diagnostics =
+    (base ~enabled:false ~project_token:"", diagnostics)
+  in
   if norm enabled <> Some "true" then disabled []
   else
     match parsed_environment with
@@ -320,30 +323,34 @@ let validate_configuration ~enabled ~environment ~allow_development
         disabled
           [
             Printf.sprintf
-              "%s=development keeps analytics disabled by default; set \
-               %s=true to explicitly connect local analytics to a \
-               non-production PostHog project"
+              "%s=development keeps analytics disabled by default; set %s=true \
+               to explicitly connect local analytics to a non-production \
+               PostHog project"
               deployment_environment_env allow_development_env;
           ]
     | Some env -> (
         let diagnostics = ref [] in
         let fail msg = diagnostics := !diagnostics @ [ msg ] in
         (match norm project_token with
-        | None -> fail (project_token_env ^ " is required when analytics is enabled")
+        | None ->
+            fail (project_token_env ^ " is required when analytics is enabled")
         | Some _ -> ());
         if not (is_https api_host) then fail (api_host_env ^ " must use HTTPS");
         if not (is_https ui_host) then fail (ui_host_env ^ " must use HTTPS");
         (match project_id with
-        | None -> fail (project_id_env ^ " is required when analytics is enabled")
+        | None ->
+            fail (project_id_env ^ " is required when analytics is enabled")
         | Some id when not (is_positive_int id) ->
             fail (project_id_env ^ " must be a positive integer")
         | Some _ -> ());
         (match personal_api_key with
         | None ->
-            fail (personal_api_key_env ^ " is required when analytics is enabled")
+            fail
+              (personal_api_key_env ^ " is required when analytics is enabled")
         | Some _ -> ());
         (match public_origin with
-        | None -> fail (public_origin_env ^ " is required when analytics is enabled")
+        | None ->
+            fail (public_origin_env ^ " is required when analytics is enabled")
         | Some origin -> (
             match env with
             | Production ->
@@ -353,8 +360,10 @@ let validate_configuration ~enabled ~environment ~allow_development
                        public_origin_env production_origin)
             | Staging ->
                 if not (is_https origin) then
-                  fail (public_origin_env ^ " must be an HTTPS origin in staging")
-                else if origin = production_origin || origin = production_www_origin
+                  fail
+                    (public_origin_env ^ " must be an HTTPS origin in staging")
+                else if
+                  origin = production_origin || origin = production_www_origin
                 then
                   fail
                     (public_origin_env
@@ -476,7 +485,9 @@ let deletion_api_config () =
   | (Some _, None | None, Some _) when not !warned_partial_deletion_config ->
       warned_partial_deletion_config := true;
       Logs.warn (fun m ->
-          m "only one of %s and %s is set; PostHog person deletion stays pending"
+          m
+            "only one of %s and %s is set; PostHog person deletion stays \
+             pending"
             project_id_env personal_api_key_env);
       None
   | _ -> None
@@ -519,13 +530,13 @@ let validate_consent_request ~content_type ~origin ~sec_fetch_site ~body =
   let is_json =
     match content_type with
     | None -> false
-    | Some ct -> (
+    | Some ct ->
         let ct = String.lowercase_ascii (String.trim ct) in
         let mime = "application/json" in
         let ml = String.length mime in
         String.length ct >= ml
         && String.sub ct 0 ml = mime
-        && (String.length ct = ml || ct.[ml] = ';'))
+        && (String.length ct = ml || ct.[ml] = ';')
   in
   if not origin_ok then Error (`Forbidden "origin not allowed")
   else if not fetch_site_ok then Error (`Forbidden "fetch metadata not allowed")
@@ -537,7 +548,8 @@ let validate_consent_request ~content_type ~origin ~sec_fetch_site ~body =
     | `Assoc [ ("state", `String "denied") ] -> Ok `Denied
     | _ ->
         Error
-          (`Bad_request "body must be exactly {\"state\":\"granted\"|\"denied\"}")
+          (`Bad_request
+             "body must be exactly {\"state\":\"granted\"|\"denied\"}")
 
 (* Reference implementation of the §2.3 URL rule, mirrored by analytics.js:
    analytics URLs carry origin + path only — never query strings (which hold
@@ -559,9 +571,7 @@ let consent_of_cookie_header header =
             let part = String.trim part in
             match String.index_opt part '=' with
             | Some i when String.sub part 0 i = consent_cookie_name -> (
-                match
-                  String.sub part (i + 1) (String.length part - i - 1)
-                with
+                match String.sub part (i + 1) (String.length part - i - 1) with
                 | "granted" -> `Granted
                 | "denied" -> `Denied
                 | _ -> `Unknown)
@@ -674,8 +684,8 @@ let event_properties = function
       [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
   | Account_logged_in { user_id; person } ->
       [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
-  | Community_joined { user_id; community_id; community_slug; community_visibility }
-    ->
+  | Community_joined
+      { user_id; community_id; community_slug; community_visibility } ->
       [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
       @ opt_string "community_slug" community_slug
       @ [ ("community_visibility", `String community_visibility) ]
@@ -702,8 +712,15 @@ let event_properties = function
           ("response_mode", `String (response_mode_to_string response_mode));
         ]
   | Forum_thread_created
-      { user_id; community_id; section_id; post_id; content_length; has_link;
-        has_mention } ->
+      {
+        user_id;
+        community_id;
+        section_id;
+        post_id;
+        content_length;
+        has_link;
+        has_mention;
+      } ->
       [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
       @ opt_int "section_id" section_id
       @ [
@@ -713,8 +730,15 @@ let event_properties = function
           ("has_mention", `Bool has_mention);
         ]
   | Forum_comment_created
-      { user_id; community_id; post_id; comment_id; parent_comment_id;
-        content_length; has_mention } ->
+      {
+        user_id;
+        community_id;
+        post_id;
+        comment_id;
+        parent_comment_id;
+        content_length;
+        has_mention;
+      } ->
       [
         ("user_id", `Int user_id);
         ("community_id", `Int community_id);
@@ -770,7 +794,10 @@ let event_properties = function
       { user_id; project_id; project_kind; repository_count } ->
       [ ("user_id", `Int user_id) ]
       @ positive_id64 "project_id" project_id
-      @ [ ("project_kind", `String (Project_identity.string_of_kind project_kind)) ]
+      @ [
+          ( "project_kind",
+            `String (Project_identity.string_of_kind project_kind) );
+        ]
       @ bounded_count "repository_count" repository_count
   | Dedicated_home_provisioned { user_id }
   | Project_home_request_submitted { user_id } ->
@@ -856,7 +883,6 @@ let group_identify_payload ~api_key ~environment ~distinct_id
 (* === Dispatch (fire-and-forget) === *)
 
 let capture_timeout_seconds = 3.0
-
 let capture_sink : (Yojson.Safe.t -> unit) option ref = ref None
 
 let with_timeout seconds promise =
@@ -864,8 +890,7 @@ let with_timeout seconds promise =
     [
       promise;
       ( Lwt_unix.sleep seconds >>= fun () ->
-        Logs.warn (fun m ->
-            m "PostHog capture timed out after %.1fs" seconds);
+        Logs.warn (fun m -> m "PostHog capture timed out after %.1fs" seconds);
         Lwt.return_unit );
     ]
 
@@ -1041,7 +1066,8 @@ module Preflight = struct
 
   let parse_organization_ids body =
     match Yojson.Safe.from_string body with
-    | exception _ -> Error ("malformed_response", "organization listing did not parse")
+    | exception _ ->
+        Error ("malformed_response", "organization listing did not parse")
     | `Assoc fields -> (
         match List.assoc_opt "results" fields with
         | Some (`List orgs) ->
@@ -1058,22 +1084,27 @@ module Preflight = struct
             if orgs = [] then
               Error
                 ( "no_organizations",
-                  "the personal API key can read no organization on this host" )
+                  "the personal API key can read no organization on this host"
+                )
             else if List.length ids <> List.length orgs then
               Error
                 ( "malformed_response",
                   "organization listing contained an unusable entry" )
             else Ok ids
-        | _ -> Error ("malformed_response", "organization listing did not parse"))
+        | _ -> Error ("malformed_response", "organization listing did not parse")
+        )
     | _ -> Error ("malformed_response", "organization listing did not parse")
 
   (* The project response must carry the configured numeric id and the
      read-only api_token; the token comparison is the actual binding proof. *)
   let parse_project_body ~project_id body =
     match Yojson.Safe.from_string body with
-    | exception _ -> Error ("malformed_response", "project metadata did not parse")
+    | exception _ ->
+        Error ("malformed_response", "project metadata did not parse")
     | `Assoc fields -> (
-        match (List.assoc_opt "id" fields, List.assoc_opt "api_token" fields) with
+        match
+          (List.assoc_opt "id" fields, List.assoc_opt "api_token" fields)
+        with
         | Some (`Int id), Some (`String token)
           when string_of_int id = project_id ->
             Ok token
@@ -1091,9 +1122,9 @@ module Preflight = struct
           (Error
              ( "project_not_found",
                Printf.sprintf
-                 "project %s was not found in any organization readable by \
-                  the personal API key on %s (wrong project id, wrong \
-                  region, or a key for another project)"
+                 "project %s was not found in any organization readable by the \
+                  personal API key on %s (wrong project id, wrong region, or a \
+                  key for another project)"
                  project_id config.ui_host ))
     | org_id :: rest ->
         http_get ~api_key
@@ -1102,7 +1133,7 @@ module Preflight = struct
                 config.ui_host org_id project_id))
         >>= fun (status, body) ->
         if status = 404 then find_project ~config ~api_key ~project_id rest
-        else if status >= 200 && status < 300 then (
+        else if status >= 200 && status < 300 then
           match parse_project_body ~project_id body with
           | Error e -> Lwt.return (Error e)
           | Ok live_token ->
@@ -1118,7 +1149,7 @@ module Preflight = struct
                           sha256:%s, live token fingerprint sha256:%s)"
                          project_id
                          (token_fingerprint config.project_token)
-                         (token_fingerprint live_token) )))
+                         (token_fingerprint live_token) ))
         else
           Lwt.return
             (Error
@@ -1131,9 +1162,8 @@ module Preflight = struct
         Lwt.return
           (Error
              ( "region_mismatch",
-               Printf.sprintf
-                 "%s is a %s-cloud host but %s is a %s-cloud host" api_host_env
-                 a ui_host_env b ))
+               Printf.sprintf "%s is a %s-cloud host but %s is a %s-cloud host"
+                 api_host_env a ui_host_env b ))
     | api_region, _ ->
         (* limit=100 keeps the single documented listing call sufficient for
            any realistic key; pagination beyond that is reported as not-found
@@ -1143,7 +1173,7 @@ module Preflight = struct
              (Uri.of_string (config.ui_host ^ "/api/organizations/"))
              [ ("limit", "100") ])
         >>= fun (status, body) ->
-        if status >= 200 && status < 300 then (
+        if status >= 200 && status < 300 then
           match parse_organization_ids body with
           | Error e -> Lwt.return (Error e)
           | Ok org_ids -> (
@@ -1159,26 +1189,27 @@ module Preflight = struct
                       report_token_fingerprint =
                         token_fingerprint config.project_token;
                       report_notes =
-                        [
-                          Printf.sprintf
-                            "project %s found in organization %s on %s"
-                            project_id org_id config.ui_host;
-                          "POSTHOG_PROJECT_TOKEN matches the project's live \
-                           api_token";
-                        ]
-                        @ (match api_region with
-                          | Some region ->
-                              [
-                                Printf.sprintf
-                                  "api/ui hosts are the matching %s-cloud pair"
-                                  region;
-                              ]
-                          | None ->
-                              [
-                                "hosts are not known PostHog Cloud hosts; \
-                                 static region pairing not checked";
-                              ]);
-                    }))
+                        ([
+                           Printf.sprintf
+                             "project %s found in organization %s on %s"
+                             project_id org_id config.ui_host;
+                           "POSTHOG_PROJECT_TOKEN matches the project's live \
+                            api_token";
+                         ]
+                        @
+                        match api_region with
+                        | Some region ->
+                            [
+                              Printf.sprintf
+                                "api/ui hosts are the matching %s-cloud pair"
+                                region;
+                            ]
+                        | None ->
+                            [
+                              "hosts are not known PostHog Cloud hosts; static \
+                               region pairing not checked";
+                            ]);
+                    })
         else
           Lwt.return
             (Error
@@ -1207,15 +1238,15 @@ module Preflight = struct
                   [
                     ( verify ~config ~environment ~api_key ~project_id
                     >|= fun r -> `Done r );
-                    ( Lwt_unix.sleep timeout_seconds >|= fun () -> `Timeout );
+                    (Lwt_unix.sleep timeout_seconds >|= fun () -> `Timeout);
                   ]
                 >|= function
                 | `Done r -> r
                 | `Timeout ->
                     Error
                       ( "timeout",
-                        Printf.sprintf "no verdict within %.0fs"
-                          timeout_seconds ))
+                        Printf.sprintf "no verdict within %.0fs" timeout_seconds
+                      ))
               (fun _exn ->
                 (* Exception text can embed hosts/URLs; a bounded class is all
                    that may be reported. *)

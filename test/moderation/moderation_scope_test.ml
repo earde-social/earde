@@ -19,45 +19,50 @@ open Caqti_request.Infix
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE title LIKE 'modscope %')"
-    ; "DELETE FROM posts WHERE title LIKE 'modscope %'"
-    ; "DELETE FROM communities WHERE slug IN ('modscope-a', 'modscope-b')"
-    ; "DELETE FROM users WHERE username IN ('modscope_author', 'modscope_other')"
+    [
+      "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE title \
+       LIKE 'modscope %')";
+      "DELETE FROM posts WHERE title LIKE 'modscope %'";
+      "DELETE FROM communities WHERE slug IN ('modscope-a', 'modscope-b')";
+      "DELETE FROM users WHERE username IN ('modscope_author', \
+       'modscope_other')";
     ]
 
 let q_insert_user =
   (Caqti_type.unit ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ('modscope_author', 'modscope_author@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ('modscope_author', 'modscope_author@test.invalid', 'x', TRUE) \
+     RETURNING id"
 
 (* A second, non-author user: stands in for a moderator of community A
    attacking through the general /delete-comment path. *)
 let q_insert_other_user =
   (Caqti_type.unit ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ('modscope_other', 'modscope_other@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ('modscope_other', 'modscope_other@test.invalid', 'x', TRUE) \
+     RETURNING id"
 
 let q_insert_community =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name) VALUES ($1, $1) RETURNING id"
+    "INSERT INTO communities (slug, name) VALUES ($1, $1) RETURNING id"
 
 let q_insert_post =
   (Caqti_type.(t4 string (option string) int int) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, image_url, community_id, user_id)
-   VALUES ($1, 'modscope original post', $2, $3, $4) RETURNING id"
+    "INSERT INTO posts (title, content, image_url, community_id, user_id)\n\
+    \   VALUES ($1, 'modscope original post', $2, $3, $4) RETURNING id"
 
 let q_insert_comment =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "INSERT INTO comments (content, post_id, user_id)
-   VALUES ('modscope original comment', $1, $2) RETURNING id"
+    "INSERT INTO comments (content, post_id, user_id)\n\
+    \   VALUES ('modscope original comment', $1, $2) RETURNING id"
 
 let q_post_state =
   (Caqti_type.int ->! Caqti_type.(t2 (option string) (option string)))
-  "SELECT content, image_url FROM posts WHERE id = $1"
+    "SELECT content, image_url FROM posts WHERE id = $1"
 
 let q_comment_content =
   (Caqti_type.int ->! Caqti_type.string)
-  "SELECT content FROM comments WHERE id = $1"
+    "SELECT content FROM comments WHERE id = $1"
 
 let or_fail label = function
   | Ok v -> Lwt.return v
@@ -85,8 +90,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* Two communities, one author, a post (with image) in each. *)
 let setup_posts (module C : Caqti_lwt.CONNECTION) =
@@ -96,9 +100,15 @@ let setup_posts (module C : Caqti_lwt.CONNECTION) =
   let* b = or_fail "community b" b in
   let* author = C.find q_insert_user () in
   let* author = or_fail "author" author in
-  let* post_a = C.find q_insert_post ("modscope post a", Some "/static/uploads/modscope_a.webp", a, author) in
+  let* post_a =
+    C.find q_insert_post
+      ("modscope post a", Some "/static/uploads/modscope_a.webp", a, author)
+  in
   let* post_a = or_fail "post a" post_a in
-  let* post_b = C.find q_insert_post ("modscope post b", Some "/static/uploads/modscope_b.webp", b, author) in
+  let* post_b =
+    C.find q_insert_post
+      ("modscope post b", Some "/static/uploads/modscope_b.webp", b, author)
+  in
   let* post_b = or_fail "post b" post_b in
   Lwt.return (a, b, author, post_a, post_b)
 
@@ -113,38 +123,56 @@ let check_post_state (module C : Caqti_lwt.CONNECTION) label post_id expected =
    the admin-on-wrong-route rejection. A genuine A deletion still works and
    reports the match that entitles the handler to exactly one modlog entry. *)
 let posts_case =
-  db_case "cross-community post delete refused; local delete works" (fun conn c ->
-      let* (a, _b, _author, post_a, post_b) = setup_posts c in
-      let* cross = Earde.Admin_store.mod_delete_post conn ~community_id:a post_b in
-      Alcotest.(check (result bool string)) "A-scoped delete of B post matches nothing" (Ok false) cross;
-      let* () = check_post_state c "B post untouched, image_url intact" post_b
-          (Some "modscope original post", Some "/static/uploads/modscope_b.webp") in
-      let* local = Earde.Admin_store.mod_delete_post conn ~community_id:a post_a in
-      Alcotest.(check (result bool string)) "A-scoped delete of A post matches" (Ok true) local;
+  db_case "cross-community post delete refused; local delete works"
+    (fun conn c ->
+      let* a, _b, _author, post_a, post_b = setup_posts c in
+      let* cross =
+        Earde.Admin_store.mod_delete_post conn ~community_id:a post_b
+      in
+      Alcotest.(check (result bool string))
+        "A-scoped delete of B post matches nothing" (Ok false) cross;
+      let* () =
+        check_post_state c "B post untouched, image_url intact" post_b
+          (Some "modscope original post", Some "/static/uploads/modscope_b.webp")
+      in
+      let* local =
+        Earde.Admin_store.mod_delete_post conn ~community_id:a post_a
+      in
+      Alcotest.(check (result bool string))
+        "A-scoped delete of A post matches" (Ok true) local;
       check_post_state c "A post tombstoned, image_url cleared" post_a
         (Some "[removed by moderator]", None))
 
 (* Comments: ownership is comment -> post -> community; the scoped UPDATE joins
    posts, so a comment under a B post must not match on an A-scoped call. *)
 let comments_case =
-  db_case "cross-community comment delete refused; local delete works" (fun conn c ->
+  db_case "cross-community comment delete refused; local delete works"
+    (fun conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* (a, _b, author, post_a, post_b) = setup_posts c in
+      let* a, _b, author, post_a, post_b = setup_posts c in
       let* comment_a = C.find q_insert_comment (post_a, author) in
       let* comment_a = or_fail "comment a" comment_a in
       let* comment_b = C.find q_insert_comment (post_b, author) in
       let* comment_b = or_fail "comment b" comment_b in
-      let* cross = Earde.Admin_store.mod_delete_comment conn ~community_id:a comment_b in
-      Alcotest.(check (result (option int) string)) "A-scoped delete of B comment matches nothing" (Ok None) cross;
+      let* cross =
+        Earde.Admin_store.mod_delete_comment conn ~community_id:a comment_b
+      in
+      Alcotest.(check (result (option int) string))
+        "A-scoped delete of B comment matches nothing" (Ok None) cross;
       let* content = C.find q_comment_content comment_b in
       let* content = or_fail "B comment state" content in
-      Alcotest.(check string) "B comment untouched" "modscope original comment" content;
-      let* local = Earde.Admin_store.mod_delete_comment conn ~community_id:a comment_a in
-      Alcotest.(check (result (option int) string)) "A-scoped delete of A comment matches, returns parent post"
+      Alcotest.(check string)
+        "B comment untouched" "modscope original comment" content;
+      let* local =
+        Earde.Admin_store.mod_delete_comment conn ~community_id:a comment_a
+      in
+      Alcotest.(check (result (option int) string))
+        "A-scoped delete of A comment matches, returns parent post"
         (Ok (Some post_a)) local;
       let* content = C.find q_comment_content comment_a in
       let* content = or_fail "A comment state" content in
-      Alcotest.(check string) "A comment tombstoned" "[removed by moderator]" content;
+      Alcotest.(check string)
+        "A comment tombstoned" "[removed by moderator]" content;
       Lwt.return_unit)
 
 (* /delete-comment data path: the general endpoint is author-only for
@@ -155,9 +183,10 @@ let comments_case =
    admin path resolves the target server-side and tombstones with the admin
    label. *)
 let delete_comment_case =
-  db_case "delete-comment: ownership-scoped soft delete; admin path tombstones" (fun conn c ->
+  db_case "delete-comment: ownership-scoped soft delete; admin path tombstones"
+    (fun conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* (_a, _b, author, post_a, post_b) = setup_posts c in
+      let* _a, _b, author, post_a, post_b = setup_posts c in
       let* other = C.find q_insert_other_user () in
       let* other = or_fail "other user" other in
       let* comment_b = C.find q_insert_comment (post_b, author) in
@@ -166,10 +195,13 @@ let delete_comment_case =
          soft_delete_comment reports Ok () either way — the ownership scope in
          the SQL is what this pins down. *)
       let* r = Earde.Comment_store.soft_delete_comment conn comment_b other in
-      Alcotest.(check (result unit string)) "non-author soft delete does not error" (Ok ()) r;
+      Alcotest.(check (result unit string))
+        "non-author soft delete does not error" (Ok ()) r;
       let* content = C.find q_comment_content comment_b in
       let* content = or_fail "B comment state" content in
-      Alcotest.(check string) "non-author soft delete matches nothing" "modscope original comment" content;
+      Alcotest.(check string)
+        "non-author soft delete matches nothing" "modscope original comment"
+        content;
       (* The author still deletes their own comment. *)
       let* comment_a = C.find q_insert_comment (post_a, author) in
       let* comment_a = or_fail "comment a" comment_a in
@@ -177,17 +209,19 @@ let delete_comment_case =
       Alcotest.(check (result unit string)) "author soft delete ok" (Ok ()) r;
       let* content = C.find q_comment_content comment_a in
       let* content = or_fail "A comment state" content in
-      Alcotest.(check string) "author soft delete tombstones" "[deleted]" content;
+      Alcotest.(check string)
+        "author soft delete tombstones" "[deleted]" content;
       (* Global admin: deletes regardless of author, with the admin label. *)
-      let* r = Earde.Admin_store.admin_delete_comment conn ~label:"[removed by admin]" comment_b in
+      let* r =
+        Earde.Admin_store.admin_delete_comment conn ~label:"[removed by admin]"
+          comment_b
+      in
       Alcotest.(check (result unit string)) "admin delete ok" (Ok ()) r;
       let* content = C.find q_comment_content comment_b in
       let* content = or_fail "B comment after admin" content in
-      Alcotest.(check string) "admin delete tombstones with admin label" "[removed by admin]" content;
+      Alcotest.(check string)
+        "admin delete tombstones with admin label" "[removed by admin]" content;
       Lwt.return_unit)
 
 let suite = [ posts_case; comments_case; delete_comment_case ]
-
-let suites =
-  [ ( "mod_delete_community_scope", suite )
-  ]
+let suites = [ ("mod_delete_community_scope", suite) ]

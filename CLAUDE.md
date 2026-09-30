@@ -79,6 +79,8 @@ valuable discussion can be kept and found later rather than scrolling away.
 - New logic-heavy features should ship with tests, runnable with the normal local
   test setup.
 - Run `dune build` and `dune test` before considering a change complete.
+- Keep OCaml and dune files formatted: `dune build @fmt` must pass with the
+  ocamlformat version pinned in `.ocamlformat` (`dune fmt` applies it).
 - Run `gleam build` (in `services/realtime_gateway`) when touching the realtime
   gateway.
 

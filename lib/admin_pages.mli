@@ -11,4 +11,5 @@ val admin_dashboard_page :
   recent_users:Admin_store.admin_recent_user list ->
   pending:Admin_store.pending_signup_row list ->
   banned_users:User_store.user list ->
-  Dream.request -> string
+  Dream.request ->
+  string

@@ -18,10 +18,18 @@
    so the OCaml sources are scanned verbatim. *)
 
 let lc_case name f = Alcotest.test_case name `Quick f
-
 let main_ml = List.assoc "bin/main.ml" Source_census.production_sources
-
 let count_in haystack needle = Html_assert.count_sub haystack needle
+
+(* Registrations are compared as token sequences: the formatter decides where
+   a long route line breaks, and that must not decide whether it exists. *)
+let squash s =
+  String.split_on_char '\n' s
+  |> List.concat_map (String.split_on_char ' ')
+  |> List.filter (( <> ) "")
+  |> String.concat " "
+
+let main_ml_tokens = squash main_ml
 
 (* --- 1. no production route for the retired KPI dashboard -------------- *)
 let hq_route_case =
@@ -31,7 +39,8 @@ let hq_route_case =
         (fun needle ->
           Alcotest.(check bool)
             (Printf.sprintf "main.ml free of %S" needle)
-            false (Html_assert.contains main_ml needle))
+            false
+            (Html_assert.contains main_ml needle))
         [ "\"/earde-hq-dashboard\""; "hq_dashboard" ];
       (* Handler and renderer are gone from every production source. The
          page-view exclusion filter in handlers.ml deliberately still names
@@ -44,39 +53,74 @@ let hq_route_case =
 
 (* --- 2. no production caller of any deleted wrapper -------------------- *)
 let deleted_wrappers =
-  [ "Components.layout"; "Components.auth_page"; "Components.create_page"
-  ; "Components.admin_page"; "Components.account_page"
-  ; "Components.community_manage_page"; "Components.community_home_page"
-  ; "Components.search_page"; "Components.global_shell"
-  ; "Components.community_shell"; "Components.feed_shell"
-  ; "Components.render_app_topbar"; "Components.left_sidebar"
-  ; "Components.community_card"; "Pages.index"; "Handlers.home_handler" ]
+  [
+    "Components.layout";
+    "Components.auth_page";
+    "Components.create_page";
+    "Components.admin_page";
+    "Components.account_page";
+    "Components.community_manage_page";
+    "Components.community_home_page";
+    "Components.search_page";
+    "Components.global_shell";
+    "Components.community_shell";
+    "Components.feed_shell";
+    "Components.render_app_topbar";
+    "Components.left_sidebar";
+    "Components.community_card";
+    "Pages.index";
+    "Handlers.home_handler";
+  ]
 
 let dead_wrapper_case =
   lc_case "no production caller of any deleted wrapper" (fun () ->
-      List.iter (fun n -> Source_census.absent_everywhere "deleted wrapper" n)
+      List.iter
+        (fun n -> Source_census.absent_everywhere "deleted wrapper" n)
         deleted_wrappers;
       (* and no definition survives either *)
       List.iter
         (fun n -> Source_census.absent_everywhere "deleted definition" n)
-        [ "let layout "; "let auth_page "; "let create_page "
-        ; "let admin_page "; "let account_page "; "let community_manage_page "
-        ; "let community_home_page "; "let search_page "; "let global_shell "
-        ; "let community_shell "; "let feed_shell "; "let render_app_topbar "
-        ; "let left_sidebar "; "let community_card "; "let home_handler "
-        ; "type rail_active"; "type nav_item"; "type nav_group" ])
+        [
+          "let layout ";
+          "let auth_page ";
+          "let create_page ";
+          "let admin_page ";
+          "let account_page ";
+          "let community_manage_page ";
+          "let community_home_page ";
+          "let search_page ";
+          "let global_shell ";
+          "let community_shell ";
+          "let feed_shell ";
+          "let render_app_topbar ";
+          "let left_sidebar ";
+          "let community_card ";
+          "let home_handler ";
+          "type rail_active";
+          "type nav_item";
+          "type nav_group";
+        ])
 
 (* --- 3./4./5. deleted stylesheets, Tailwind CDN, Google Fonts ---------- *)
 let deleted_stylesheets =
-  [ "shell.css"; "create.css"; "admin.css"; "auth.css"; "account.css"
-  ; "community-manage.css"; "community-home.css"; "search.css" ]
+  [
+    "shell.css";
+    "create.css";
+    "admin.css";
+    "auth.css";
+    "account.css";
+    "community-manage.css";
+    "community-home.css";
+    "search.css";
+  ]
 
 let deleted_css_case =
   lc_case "no production reference to a deleted stylesheet" (fun () ->
       List.iter
         (fun f ->
           Source_census.absent_everywhere "deleted stylesheet" f;
-          Source_census.absent_everywhere "deleted stylesheet path" ("/static/css/" ^ f))
+          Source_census.absent_everywhere "deleted stylesheet path"
+            ("/static/css/" ^ f))
         deleted_stylesheets)
 
 let approved_stylesheets = [ "earde.css"; "mobile-gate.css" ]
@@ -91,7 +135,11 @@ let surviving_css_case =
             let marker = "href='/static/css/" in
             let ml = String.length marker in
             let rec loop i acc =
-              match Html_assert.index_of (String.sub body i (String.length body - i)) marker with
+              match
+                Html_assert.index_of
+                  (String.sub body i (String.length body - i))
+                  marker
+              with
               | None -> acc
               | Some j ->
                   let start = i + j + ml in
@@ -104,8 +152,8 @@ let surviving_css_case =
             loop 0 [])
           Source_census.production_sources
       in
-      Alcotest.(check bool) "at least one stylesheet is emitted" true
-        (sources <> []);
+      Alcotest.(check bool)
+        "at least one stylesheet is emitted" true (sources <> []);
       List.iter
         (fun f ->
           if not (List.mem f approved_stylesheets) then
@@ -123,8 +171,12 @@ let external_assets_case =
   lc_case "no Tailwind CDN and no Google Fonts in production" (fun () ->
       List.iter
         (fun n -> Source_census.absent_everywhere "external asset" n)
-        [ "cdn.tailwindcss.com"; "tailwindcss"; "fonts.googleapis.com"
-        ; "fonts.gstatic.com" ];
+        [
+          "cdn.tailwindcss.com";
+          "tailwindcss";
+          "fonts.googleapis.com";
+          "fonts.gstatic.com";
+        ];
       (* The two shipped stylesheets must not pull them in either. *)
       List.iter
         (fun sheet ->
@@ -133,45 +185,67 @@ let external_assets_case =
             (fun n ->
               if Html_assert.contains css n then
                 Alcotest.failf "%s imports %S" sheet n)
-            [ "fonts.googleapis.com"; "fonts.gstatic.com"
-            ; "cdn.tailwindcss.com"; "@import url('http" ])
+            [
+              "fonts.googleapis.com";
+              "fonts.gstatic.com";
+              "cdn.tailwindcss.com";
+              "@import url('http";
+            ])
         approved_stylesheets)
 
 (* --- 6./13. rendered documents: approved local CSS only ---------------- *)
 let census_community ~visibility : Earde.Community_types.community =
-  { id = 3; slug = "census"; name = "Census"; description = None
-  ; rules = None; avatar_url = None; banner_url = None
-  ; allow_downvotes = true; sections_enabled = true; visibility
-  ; indexable = true; is_network_community = false
-  ; onboarding_state = Earde.Community_types.Community_published; discoverable = true }
+  {
+    id = 3;
+    slug = "census";
+    name = "Census";
+    description = None;
+    rules = None;
+    avatar_url = None;
+    banner_url = None;
+    allow_downvotes = true;
+    sections_enabled = true;
+    visibility;
+    indexable = true;
+    is_network_community = false;
+    onboarding_state = Earde.Community_types.Community_published;
+    discoverable = true;
+  }
 
 (* One document per live wrapper family. *)
 let launch_documents () =
-  let community = census_community ~visibility:Earde.Community_types.Community_public in
-  [ ( "launch_entry_page"
-    , Earde.Page_shell.launch_entry_page ~page_class:"launch-bring"
-        ~title:"T" ~content:(Earde.Html.static "B") () )
-  ; ( "launch_auth_page"
-    , Earde.Page_shell.launch_auth_page ~page_class:"launch-login" ~title:"T"
-        ~content:(Earde.Html.static "B") () )
-  ; ( "launch_message_page"
-    , Earde.Page_shell.launch_message_page ~title:"T" ~content:(Earde.Html.static "B") () )
-  ; ( "launch_app_page (anonymous)"
-    , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
-        ~content:(Earde.Html.static "B") () )
-  ; ( "launch_app_page (member)"
-    , Earde.Page_shell.launch_app_page ~user:"alice"
-        ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") () )
-  ; ( "launch_onboarding_page"
-    , Earde.Page_shell.launch_onboarding_page
-        ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
-  ; ( "launch_community_page"
-    , Earde.Community_shell.launch_community_page ~community ~sidebar:(Earde.Html.static "S")
-        ~page_class:"launch-community-overview" ~title:"T" ~content:(Earde.Html.static "B") () )
-  ; ( "launch_community_surface_page"
-    , Earde.Community_shell.launch_community_surface_page ~community ~sidebar:(Earde.Html.static "S")
-        ~page_class:"launch-community-channel" ~title:"T"
-        ~main_el:(Earde.Html.static "<main class='cs-main'>B</main>") () )
+  let community =
+    census_community ~visibility:Earde.Community_types.Community_public
+  in
+  [
+    ( "launch_entry_page",
+      Earde.Page_shell.launch_entry_page ~page_class:"launch-bring" ~title:"T"
+        ~content:(Earde.Html.static "B") () );
+    ( "launch_auth_page",
+      Earde.Page_shell.launch_auth_page ~page_class:"launch-login" ~title:"T"
+        ~content:(Earde.Html.static "B") () );
+    ( "launch_message_page",
+      Earde.Page_shell.launch_message_page ~title:"T"
+        ~content:(Earde.Html.static "B") () );
+    ( "launch_app_page (anonymous)",
+      Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
+        ~content:(Earde.Html.static "B") () );
+    ( "launch_app_page (member)",
+      Earde.Page_shell.launch_app_page ~user:"alice" ~page_class:"launch-feed"
+        ~title:"T" ~content:(Earde.Html.static "B") () );
+    ( "launch_onboarding_page",
+      Earde.Page_shell.launch_onboarding_page ~page_class:"launch-project-new"
+        ~title:"T" ~content:(Earde.Html.static "B") () );
+    ( "launch_community_page",
+      Earde.Community_shell.launch_community_page ~community
+        ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-overview"
+        ~title:"T" ~content:(Earde.Html.static "B") () );
+    ( "launch_community_surface_page",
+      Earde.Community_shell.launch_community_surface_page ~community
+        ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-channel"
+        ~title:"T"
+        ~main_el:(Earde.Html.static "<main class='cs-main'>B</main>")
+        () );
   ]
 
 let rendered_css_case =
@@ -183,9 +257,16 @@ let rendered_css_case =
             (fun needle ->
               if Html_assert.contains html needle then
                 Alcotest.failf "%s references %S" label needle)
-            [ "cdn.tailwindcss.com"; "fonts.googleapis.com"
-            ; "fonts.gstatic.com"; "href='http"; "href=\"http"
-            ; "src='http"; "src=\"http"; "@import" ];
+            [
+              "cdn.tailwindcss.com";
+              "fonts.googleapis.com";
+              "fonts.gstatic.com";
+              "href='http";
+              "href=\"http";
+              "src='http";
+              "src=\"http";
+              "@import";
+            ];
           List.iter
             (fun sheet ->
               if Html_assert.contains html sheet then
@@ -194,7 +275,8 @@ let rendered_css_case =
           Alcotest.(check bool)
             (label ^ " loads earde.css")
             true
-            (Html_assert.contains html "<link rel='stylesheet' href='/static/css/earde.css'>"))
+            (Html_assert.contains html
+               "<link rel='stylesheet' href='/static/css/earde.css'>"))
         (launch_documents ()))
 
 (* --- 7./8./9./10. routes that had to survive --------------------------- *)
@@ -204,22 +286,24 @@ let surviving_routes_case =
         (fun needle ->
           Alcotest.(check bool)
             (Printf.sprintf "main.ml registers %s" needle)
-            true (Html_assert.contains main_ml needle))
-        [ (* 7. root redirect *)
-          "Dream.get \"/\" (fun request -> Dream.redirect request \"/feed\")"
-          (* 8. legacy /all redirect *)
-        ; "Dream.get \"/all\" (fun request -> Dream.redirect request \"/feed\")"
-        ; "Dream.get \"/feed\" Earde.Public_handlers.feed_handler"
-          (* 9. canonical /p/:id + its converted fallback *)
-        ; "Dream.get \"/p/:id\" Earde.Post_handlers.view_post_handler"
-          (* 10. /admin and its global ban/unban actions *)
-        ; "Dream.get  \"/admin\" Earde.Admin_handlers.admin_dashboard_handler"
-        ; "Dream.post \"/admin/ban/user/:id\" Earde.Admin_handlers.ban_user_handler"
-        ; "Dream.post \"/admin/unban/user/:id\" \
-           Earde.Admin_handlers.unban_user_global_handler"
-          (* explicitly retained by the product decision *)
-        ; "Dream.get \"/_debug/state\" Earde.Admin_handlers.debug_state_handler"
-        ; "Dream.get \"/new-community\" Earde.Community_handlers.new_community_page"
+            true
+            (Html_assert.contains main_ml_tokens needle))
+        (* 7. the root and legacy /all redirects, 8. the feed, 9. canonical
+           /p/:id, 10. /admin with its global ban/unban actions, and the routes
+           explicitly retained by the product decision. *)
+        [
+          "Dream.get \"/\" (fun request -> Dream.redirect request \"/feed\")";
+          "Dream.get \"/all\" (fun request -> Dream.redirect request \"/feed\")";
+          "Dream.get \"/feed\" Earde.Public_handlers.feed_handler";
+          "Dream.get \"/p/:id\" Earde.Post_handlers.view_post_handler";
+          "Dream.get \"/admin\" Earde.Admin_handlers.admin_dashboard_handler";
+          "Dream.post \"/admin/ban/user/:id\" \
+           Earde.Admin_handlers.ban_user_handler";
+          "Dream.post \"/admin/unban/user/:id\" \
+           Earde.Admin_handlers.unban_user_global_handler";
+          "Dream.get \"/_debug/state\" Earde.Admin_handlers.debug_state_handler";
+          "Dream.get \"/new-community\" \
+           Earde.Community_handlers.new_community_page";
         ])
 
 (* --- 14. a removed route reaches the normal unknown-route response ----- *)
@@ -229,12 +313,14 @@ let unknown_route_case =
          retired path could still be served is a wildcard route, so the
          router must carry exactly one — the static file mount. *)
       Alcotest.(check int) "wildcard routes" 1 (count_in main_ml "/**");
-      Alcotest.(check bool) "the wildcard is the static mount" true
+      Alcotest.(check bool)
+        "the wildcard is the static mount" true
         (Html_assert.contains main_ml
            "Dream.get \"/static/**\" (Dream.static \"static\")");
       (* Dream.any is used once, for the analytics-consent 405 arm. *)
       Alcotest.(check int) "Dream.any routes" 1 (count_in main_ml "Dream.any");
-      Alcotest.(check bool) "and it is path-specific" true
+      Alcotest.(check bool)
+        "and it is path-specific" true
         (Html_assert.contains main_ml "Dream.any \"/analytics/consent\""))
 
 (* --- 10b. /admin carries no KPI-dashboard link ------------------------- *)
@@ -252,16 +338,21 @@ let admin_no_kpi_case =
         (fun needle ->
           if Html_assert.contains html needle then
             Alcotest.failf "/admin still offers %S" needle)
-        [ "earde-hq-dashboard"; "hq-dashboard"; "Mission Control"
-        ; "posthog.com"; "PostHog" ];
+        [
+          "earde-hq-dashboard";
+          "hq-dashboard";
+          "Mission Control";
+          "posthog.com";
+          "PostHog";
+        ];
       (* still the real admin surface *)
-      Alcotest.(check bool) "renders the launch admin document" true
+      Alcotest.(check bool)
+        "renders the launch admin document" true
         (Html_assert.contains html "<body class='launch-global-admin'>"))
 
 (* --- 11. the shared message document survives -------------------------- *)
 let msg_page_case =
-  lc_case "shared msg_page is intact on the launch message document"
-    (fun () ->
+  lc_case "shared msg_page is intact on the launch message document" (fun () ->
       (* signature retention *)
       ignore
         (Earde.Site_pages.msg_page
@@ -279,13 +370,14 @@ let msg_page_case =
           (Dream.request ~method_:`GET ~target:"/login" "")
       in
       let plain = render () in
-      Alcotest.(check bool) "neutral launch message document" true
+      Alcotest.(check bool)
+        "neutral launch message document" true
         (Html_assert.contains plain "<body class='launch-message-page'>");
       (* the anti-enumeration equality: both arms stay byte-identical *)
-      Alcotest.(check string) "~auth arms are byte-identical" plain
-        (render ~auth:true ());
-      Alcotest.(check string) "~auth:false is the same document" plain
-        (render ~auth:false ()))
+      Alcotest.(check string)
+        "~auth arms are byte-identical" plain (render ~auth:true ());
+      Alcotest.(check string)
+        "~auth:false is the same document" plain (render ~auth:false ()))
 
 (* --- 12. exactly one behavior-script definition ------------------------ *)
 let single_behavior_script_case =
@@ -296,41 +388,56 @@ let single_behavior_script_case =
         (fun (label, needle) ->
           Alcotest.(check int)
             (Printf.sprintf "one %s" label)
-            1 (count_in components needle))
-        [ ("behavior script", "let launch_behavior_script")
-        ; ("share snippet", "let launch_share_snippet")
-        ; ("share script", "let launch_share_script")
-        ; ("mobile gate panel", "let mobile_desktop_gate")
-        ; ("analytics assets", "let analytics_assets") ];
+            1
+            (count_in components needle))
+        [
+          ("behavior script", "let launch_behavior_script");
+          ("share snippet", "let launch_share_snippet");
+          ("share script", "let launch_share_script");
+          ("mobile gate panel", "let mobile_desktop_gate");
+          ("analytics assets", "let analytics_assets");
+        ];
       (* The share helper is one snippet reused by both scripts, so
          copyPostLink can never fork. *)
-      Alcotest.(check int) "one copyPostLink definition" 1
+      Alcotest.(check int)
+        "one copyPostLink definition" 1
         (count_in components "function copyPostLink");
       (* No count fetch anywhere in the component library: the badge is
          server-rendered. The four document builders that carry a
          member-capable top bar (entry under Entry_viewer, app,
          onboarding, community) each call the one shared renderer, so no
          builder can hard-code a badge (or a zero) of its own. *)
-      Alcotest.(check int) "no unread-notifs fetch call" 0
+      Alcotest.(check int)
+        "no unread-notifs fetch call" 0
         (count_in components "unread-notifs");
-      Alcotest.(check int) "no hard-coded badge markup" 0
+      Alcotest.(check int)
+        "no hard-coded badge markup" 0
         (count_in components "bell__count");
-      Alcotest.(check int) "four shared badge render calls" 4
+      Alcotest.(check int)
+        "four shared badge render calls" 4
         (count_in components "Notification_badge.badge_html"))
 
 let suite =
-  [ hq_route_case; dead_wrapper_case; deleted_css_case; surviving_css_case
-  ; external_assets_case; rendered_css_case; surviving_routes_case
-  ; unknown_route_case; admin_no_kpi_case; msg_page_case
-  ; single_behavior_script_case ]
+  [
+    hq_route_case;
+    dead_wrapper_case;
+    deleted_css_case;
+    surviving_css_case;
+    external_assets_case;
+    rendered_css_case;
+    surviving_routes_case;
+    unknown_route_case;
+    admin_no_kpi_case;
+    msg_page_case;
+    single_behavior_script_case;
+  ]
 
 let suites =
-    (* Final legacy-asset census: the retired KPI dashboard route family,
+  (* Final legacy-asset census: the retired KPI dashboard route family,
        the deleted chrome wrappers, the deleted per-page stylesheets, the
        Tailwind CDN and Google Fonts are all absent from every production
        source and every rendered launch document; the redirects, routes,
        shared message document and single behavior-script definition that
        had to survive are all still there. Static source census plus pure
        renders — DB-free. *)
-  [ ("legacy_asset_census", suite)
-  ]
+  [ ("legacy_asset_census", suite) ]

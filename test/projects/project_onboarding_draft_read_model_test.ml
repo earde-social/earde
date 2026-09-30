@@ -19,9 +19,7 @@ module GUI = Earde.Github_user_installations
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Read = Earde.Project_onboarding_draft_read_model
-
 module Store = Earde.Project_onboarding_draft_store
 
 let error_str : Read.error -> string = function
@@ -35,7 +33,6 @@ let account_type_str : GUI.account_type -> string = function
   | GUI.Organization -> "organization"
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
 
 (* Fixtures — reserved external-installation-id range
@@ -45,51 +42,51 @@ let insert_user = Db_fixture.insert_user
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 939000001 AND 939000999)"
-    ; "DELETE FROM users WHERE username LIKE 'podread_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 939000001 AND 939000999"
+    [
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 939000001 AND 939000999)";
+      "DELETE FROM users WHERE username LIKE 'podread_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       939000001 AND 939000999";
     ]
 
 (* One statement, one NOW(): both rows get the database-identical
    updated_at, forcing the id DESC tiebreak to decide. *)
 let q_equalize_updated =
   (Caqti_type.(t2 int64 int64) ->. Caqti_type.unit)
-  "UPDATE project_onboarding_drafts SET updated_at = NOW()
-   WHERE id IN ($1, $2)"
+    "UPDATE project_onboarding_drafts SET updated_at = NOW()\n\
+    \   WHERE id IN ($1, $2)"
 
 let q_select_up_to =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "UPDATE project_onboarding_draft_repositories
-   SET is_selected = TRUE WHERE draft_id = $1 AND position <= $2"
+    "UPDATE project_onboarding_draft_repositories\n\
+    \   SET is_selected = TRUE WHERE draft_id = $1 AND position <= $2"
 
 let q_mark_primary =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "UPDATE project_onboarding_draft_repositories
-   SET is_primary = TRUE WHERE draft_id = $1 AND position = $2"
+    "UPDATE project_onboarding_draft_repositories\n\
+    \   SET is_primary = TRUE WHERE draft_id = $1 AND position = $2"
 
 let q_poison_description =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "UPDATE project_onboarding_draft_repositories
-   SET description = 'bad' || CHR(1) || 'description'
-   WHERE draft_id = $1 AND position = $2"
+    "UPDATE project_onboarding_draft_repositories\n\
+    \   SET description = 'bad' || CHR(1) || 'description'\n\
+    \   WHERE draft_id = $1 AND position = $2"
 
 (* Oversize fixture: canonical filler rows at positions 2..$2, pushing a
    seeded one-repository draft past the documented 2,000 maximum. *)
 let q_bulk_repos =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "INSERT INTO project_onboarding_draft_repositories
-     (draft_id, position, github_repository_id, github_owner_id,
-      owner_login, name, full_name, html_url, description,
-      default_branch, is_archived)
-   SELECT $1, g, 939500000 + g, 939100071,
-          'podread-owner', 'bulk-' || g, 'podread-owner/bulk-' || g,
-          'https://github.com/podread-owner/bulk-' || g,
-          NULL, 'main', FALSE
-   FROM generate_series(2, $2) AS g"
+    "INSERT INTO project_onboarding_draft_repositories\n\
+    \     (draft_id, position, github_repository_id, github_owner_id,\n\
+    \      owner_login, name, full_name, html_url, description,\n\
+    \      default_branch, is_archived)\n\
+    \   SELECT $1, g, 939500000 + g, 939100071,\n\
+    \          'podread-owner', 'bulk-' || g, 'podread-owner/bulk-' || g,\n\
+    \          'https://github.com/podread-owner/bulk-' || g,\n\
+    \          NULL, 'main', FALSE\n\
+    \   FROM generate_series(2, $2) AS g"
 
 (* Each case gets a fresh connection and a clean fixture slate; cleanup
    runs again afterwards even when an assertion fails mid-way. *)
@@ -113,15 +110,15 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* Draft fixtures go through the real store against the real client
    chain, exactly as production writes them. *)
 let refresh_draft ?(login = "podread-owner") ?(target = "User") conn ~user
     ~ext_id ~account_id repos =
   let* v =
-    Project_fixture.verified ~installation_id:ext_id ~account_id ~login ~target ()
+    Project_fixture.verified ~installation_id:ext_id ~account_id ~login ~target
+      ()
   in
   let* set = Project_fixture.repo_set ~installation:v repos in
   let* draft = Project_fixture.refresh_ok "fixture refresh" conn ~user v set in
@@ -130,9 +127,8 @@ let refresh_draft ?(login = "podread-owner") ?(target = "User") conn ~user
 let make_draft ?login ?target ?installation_login ?installation_type
     ?connected_by conn ~user ~ext_id ~account_id repos =
   let* inst =
-    Project_fixture.insert_installation
-      ?login:installation_login ?account_type:installation_type
-      ?connected_by conn ~ext_id ~account_id
+    Project_fixture.insert_installation ?login:installation_login
+      ?account_type:installation_type ?connected_by conn ~ext_id ~account_id
   in
   let* draft =
     refresh_draft ?login ?target conn ~user ~ext_id ~account_id repos
@@ -150,8 +146,7 @@ let list_ok label conn ~user =
 let list_expect label expected conn ~user =
   let* r = Read.list_available conn ~user_id:user in
   match r with
-  | Ok _ ->
-      Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
   | Error e ->
       Alcotest.(check string) label (error_str expected) (error_str e);
       Lwt.return_unit
@@ -174,27 +169,31 @@ let load_expect label expected conn ~user ~draft =
   let* r = Read.load_available conn ~user_id:user ~draft_id:draft in
   match r with
   | Ok None ->
-      Alcotest.failf "%s: expected %s, got Ok None" label
-        (error_str expected)
+      Alcotest.failf "%s: expected %s, got Ok None" label (error_str expected)
   | Ok (Some _) ->
-      Alcotest.failf "%s: expected %s, got Ok Some" label
-        (error_str expected)
+      Alcotest.failf "%s: expected %s, got Ok Some" label (error_str expected)
   | Error e ->
       Alcotest.(check string) label (error_str expected) (error_str e);
       Lwt.return_unit
 
-let check_summary label ~draft ~login ~account_type ~count ~selected
-    ~primary s =
+let check_summary label ~draft ~login ~account_type ~count ~selected ~primary s
+    =
   Alcotest.(check int64) (label ^ ": draft id") draft (Read.draft_id s);
-  Alcotest.(check string) (label ^ ": account login") login
-    (Read.account_login s);
-  Alcotest.(check string) (label ^ ": account type") account_type
+  Alcotest.(check string)
+    (label ^ ": account login")
+    login (Read.account_login s);
+  Alcotest.(check string)
+    (label ^ ": account type") account_type
     (account_type_str (Read.account_type s));
-  Alcotest.(check int) (label ^ ": repository count") count
-    (Read.repository_count s);
-  Alcotest.(check int) (label ^ ": selected count") selected
+  Alcotest.(check int)
+    (label ^ ": repository count")
+    count (Read.repository_count s);
+  Alcotest.(check int)
+    (label ^ ": selected count")
+    selected
     (Read.selected_repository_count s);
-  Alcotest.(check bool) (label ^ ": has primary") primary
+  Alcotest.(check bool)
+    (label ^ ": has primary") primary
     (Read.has_primary_repository s)
 
 (* One text signature per returned repository (mirroring the expected_sig
@@ -210,13 +209,13 @@ let view_sig r =
     (Read.default_branch r) (Read.is_archived r) (Read.is_selected r)
     (Read.is_primary r)
 
-let expected_sig ~position ~id ~account_id ~login
-    ?(description = "<null>") ?(branch = "main") ?(archived = false)
-    ?(selected = false) ?(primary = false) name =
+let expected_sig ~position ~id ~account_id ~login ?(description = "<null>")
+    ?(branch = "main") ?(archived = false) ?(selected = false)
+    ?(primary = false) name =
   Printf.sprintf
-    "%d|%Ld|%Ld|%s|%s|%s/%s|https://github.com/%s/%s|%s|%s|%b|%b|%b"
-    position id account_id login name login name login name description
-    branch archived selected primary
+    "%d|%Ld|%Ld|%s|%s|%s/%s|https://github.com/%s/%s|%s|%s|%b|%b|%b" position id
+    account_id login name login name login name description branch archived
+    selected primary
 
 (* === invalid input === *)
 
@@ -224,20 +223,17 @@ let invalid_input_case =
   db_case "read: non-positive ids rejected before SQL" (fun conn ->
       let* () = list_expect "list user 0" Read.Invalid_user_id conn ~user:0 in
       let* () =
-        list_expect "list negative user" Read.Invalid_user_id conn
-          ~user:(-4)
+        list_expect "list negative user" Read.Invalid_user_id conn ~user:(-4)
       in
       let* () =
-        load_expect "load user 0" Read.Invalid_user_id conn ~user:0
+        load_expect "load user 0" Read.Invalid_user_id conn ~user:0 ~draft:1L
+      in
+      let* () =
+        load_expect "load negative user" Read.Invalid_user_id conn ~user:(-1)
           ~draft:1L
       in
       let* () =
-        load_expect "load negative user" Read.Invalid_user_id conn
-          ~user:(-1) ~draft:1L
-      in
-      let* () =
-        load_expect "load draft 0" Read.Invalid_draft_id conn ~user:1
-          ~draft:0L
+        load_expect "load draft 0" Read.Invalid_draft_id conn ~user:1 ~draft:0L
       in
       load_expect "load negative draft" Read.Invalid_draft_id conn ~user:1
         ~draft:(-9L))
@@ -257,63 +253,78 @@ let empty_case =
       in
       let* after = list_ok "installation without draft" conn ~user:uid in
       Alcotest.(check int) "still no drafts listed" 0 (List.length after);
-      let* absent = Db_fixture.find conn "absent draft id" Project_fixture.q_absent_draft_id () in
+      let* absent =
+        Db_fixture.find conn "absent draft id" Project_fixture.q_absent_draft_id
+          ()
+      in
       load_none "nonexistent draft collapses to absent" conn ~user:uid
         ~draft:absent)
 
 (* === owner isolation === *)
 
 let owner_isolation_case =
-  db_case "read: owners see only their own drafts; probes collapse"
-    (fun conn ->
+  db_case "read: owners see only their own drafts; probes collapse" (fun conn ->
       let* a = insert_user conn "podread_a" in
       let* b = insert_user conn "podread_b" in
       (* Provenance deliberately points at B from the start. *)
       let* inst, da =
         make_draft ~connected_by:b conn ~user:a ~ext_id:939000011L
           ~account_id:939100011L
-          [ Github_fixture.gur_repo ~owner_id:939100011L ~owner_login:"podread-owner"
-              ~id:939600111L ~name:"alpha" () ]
+          [
+            Github_fixture.gur_repo ~owner_id:939100011L
+              ~owner_login:"podread-owner" ~id:939600111L ~name:"alpha" ();
+          ]
       in
       let* db_draft =
-        refresh_draft conn ~user:b ~ext_id:939000011L
-          ~account_id:939100011L
-          [ Github_fixture.gur_repo ~owner_id:939100011L ~owner_login:"podread-owner"
-              ~id:939600112L ~name:"beta" () ]
+        refresh_draft conn ~user:b ~ext_id:939000011L ~account_id:939100011L
+          [
+            Github_fixture.gur_repo ~owner_id:939100011L
+              ~owner_login:"podread-owner" ~id:939600112L ~name:"beta" ();
+          ]
       in
       let check_visibility label =
         let* la = list_ok (label ^ ": list A") conn ~user:a in
-        Alcotest.(check (list int64)) (label ^ ": A lists only A's draft")
-          [ da ] (List.map Read.draft_id la);
+        Alcotest.(check (list int64))
+          (label ^ ": A lists only A's draft")
+          [ da ]
+          (List.map Read.draft_id la);
         let* lb = list_ok (label ^ ": list B") conn ~user:b in
-        Alcotest.(check (list int64)) (label ^ ": B lists only B's draft")
-          [ db_draft ] (List.map Read.draft_id lb);
+        Alcotest.(check (list int64))
+          (label ^ ": B lists only B's draft")
+          [ db_draft ]
+          (List.map Read.draft_id lb);
         let* () =
-          load_none (label ^ ": A probing B's draft") conn ~user:a
-            ~draft:db_draft
+          load_none
+            (label ^ ": A probing B's draft")
+            conn ~user:a ~draft:db_draft
         in
         let* () =
-          load_none (label ^ ": B probing A's draft") conn ~user:b
-            ~draft:da
+          load_none (label ^ ": B probing A's draft") conn ~user:b ~draft:da
         in
         let* va = load_view (label ^ ": A loads A's") conn ~user:a ~draft:da in
-        Alcotest.(check int64) (label ^ ": A's view identity") da
+        Alcotest.(check int64)
+          (label ^ ": A's view identity")
+          da
           (Read.draft_id (Read.summary va));
         let* vb =
           load_view (label ^ ": B loads B's") conn ~user:b ~draft:db_draft
         in
-        Alcotest.(check int64) (label ^ ": B's view identity") db_draft
+        Alcotest.(check int64)
+          (label ^ ": B's view identity")
+          db_draft
           (Read.draft_id (Read.summary vb));
         Lwt.return_unit
       in
       let* () = check_visibility "provenance B" in
       (* Rewriting provenance must change nothing: it is not ownership. *)
       let* () =
-        Db_fixture.exec conn "provenance to A" Project_fixture.q_set_provenance (inst, Some a)
+        Db_fixture.exec conn "provenance to A" Project_fixture.q_set_provenance
+          (inst, Some a)
       in
       let* () = check_visibility "provenance A" in
       let* () =
-        Db_fixture.exec conn "provenance to NULL" Project_fixture.q_set_provenance (inst, None)
+        Db_fixture.exec conn "provenance to NULL"
+          Project_fixture.q_set_provenance (inst, None)
       in
       check_visibility "provenance NULL")
 
@@ -325,26 +336,32 @@ let multiple_drafts_case =
       let* _, d1 =
         make_draft ~installation_login:"podread-one" conn ~user:uid
           ~ext_id:939000021L ~account_id:939100021L
-          [ Github_fixture.gur_repo ~owner_id:939100021L ~owner_login:"podread-owner"
-              ~id:939600211L ~name:"alpha" ()
-          ; Github_fixture.gur_repo ~owner_id:939100021L ~owner_login:"podread-owner"
-              ~id:939600212L ~name:"beta" ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100021L
+              ~owner_login:"podread-owner" ~id:939600211L ~name:"alpha" ();
+            Github_fixture.gur_repo ~owner_id:939100021L
+              ~owner_login:"podread-owner" ~id:939600212L ~name:"beta" ();
           ]
       in
       let* _, d2 =
         make_draft ~installation_login:"podread-two"
           ~installation_type:"organization" ~target:"Organization" conn
           ~user:uid ~ext_id:939000022L ~account_id:939100022L
-          [ Github_fixture.gur_repo ~owner_id:939100022L ~owner_login:"podread-org"
-              ~id:939600221L ~name:"gamma" ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100022L
+              ~owner_login:"podread-org" ~id:939600221L ~name:"gamma" ();
           ]
       in
       (* d2 was created later, so it holds the higher id; push its
          activity into the past so updated_at DESC must override id
          order. *)
-      Alcotest.(check bool) "fixture: d2 has the higher id" true
+      Alcotest.(check bool)
+        "fixture: d2 has the higher id" true
         (Int64.compare d2 d1 > 0);
-      let* () = Db_fixture.exec conn "backdate d2" Project_fixture.q_backdate_updated (d2, 2) in
+      let* () =
+        Db_fixture.exec conn "backdate d2" Project_fixture.q_backdate_updated
+          (d2, 2)
+      in
       let* by_updated = list_ok "updated_at ordering" conn ~user:uid in
       Alcotest.(check (list int64))
         "updated_at DESC dominates id order" [ d1; d2 ]
@@ -352,16 +369,15 @@ let multiple_drafts_case =
       (* Equal updated_at: the deterministic id DESC tiebreak decides. *)
       let* () = Db_fixture.exec conn "equalize" q_equalize_updated (d1, d2) in
       let* by_id = list_ok "id tiebreak" conn ~user:uid in
-      Alcotest.(check (list int64)) "id DESC tiebreak" [ d2; d1 ]
+      Alcotest.(check (list int64))
+        "id DESC tiebreak" [ d2; d1 ]
         (List.map Read.draft_id by_id);
       (* No automatic selection: both drafts are returned as data; each
          summary carries its own installation's current login and type
          and exact counts. *)
       let summary_for label draft summaries =
         match
-          List.find_opt
-            (fun s -> Int64.equal (Read.draft_id s) draft)
-            summaries
+          List.find_opt (fun s -> Int64.equal (Read.draft_id s) draft) summaries
         with
         | Some s -> s
         | None -> Alcotest.failf "%s: draft missing from list" label
@@ -384,11 +400,15 @@ let hidden_case name ~ext_id mutate =
       let* uid = insert_user conn "podread_a" in
       let* inst, draft =
         make_draft conn ~user:uid ~ext_id ~account_id
-          [ Github_fixture.gur_repo ~owner_id:account_id ~owner_login:"podread-owner"
-              ~id:(Int64.add ext_id 600000L) ~name:"alpha" () ]
+          [
+            Github_fixture.gur_repo ~owner_id:account_id
+              ~owner_login:"podread-owner" ~id:(Int64.add ext_id 600000L)
+              ~name:"alpha" ();
+          ]
       in
       let* before = list_ok "pre-mutation list" conn ~user:uid in
-      Alcotest.(check (list int64)) "usable before mutation" [ draft ]
+      Alcotest.(check (list int64))
+        "usable before mutation" [ draft ]
         (List.map Read.draft_id before);
       let* _ = load_view "pre-mutation load" conn ~user:uid ~draft in
       let* () = mutate conn ~inst ~draft in
@@ -414,7 +434,8 @@ let hidden_cancelled_case =
 let hidden_inaccessible_case =
   hidden_case "read: inaccessible installation hides the draft"
     ~ext_id:939000034L (fun conn ~inst ~draft:_ ->
-      Db_fixture.exec conn "inaccessible" Project_fixture.q_set_installation_status
+      Db_fixture.exec conn "inaccessible"
+        Project_fixture.q_set_installation_status
         (inst, "inaccessible", false))
 
 let hidden_revoked_case =
@@ -424,10 +445,10 @@ let hidden_revoked_case =
         (inst, "revoked", false))
 
 let hidden_revoked_at_case =
-  hidden_case "read: non-NULL revoked_at hides the draft"
-    ~ext_id:939000036L (fun conn ~inst ~draft:_ ->
-      Db_fixture.exec conn "revoked with timestamp" Project_fixture.q_set_installation_status
-        (inst, "revoked", true))
+  hidden_case "read: non-NULL revoked_at hides the draft" ~ext_id:939000036L
+    (fun conn ~inst ~draft:_ ->
+      Db_fixture.exec conn "revoked with timestamp"
+        Project_fixture.q_set_installation_status (inst, "revoked", true))
 
 (* === complete detail === *)
 
@@ -438,14 +459,15 @@ let complete_detail_case =
       let* _, draft =
         make_draft ~installation_login:"podread-account" conn ~user:uid
           ~ext_id:939000041L ~account_id:939100041L
-          [ Github_fixture.gur_repo ~owner_id:939100041L ~owner_login:"podread-owner"
-              ~id:939600411L ~name:"alpha"
-              ~description:{|"Descrizione — été 🚀"|} ()
-          ; Github_fixture.gur_repo ~owner_id:939100041L ~owner_login:"podread-owner"
-              ~id:939600412L ~name:"beta" ~default_branch:"release/v1"
-              ~archived:true ()
-          ; Github_fixture.gur_repo ~owner_id:939100041L ~owner_login:"podread-owner"
-              ~id:939600413L ~name:"gamma" ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100041L
+              ~owner_login:"podread-owner" ~id:939600411L ~name:"alpha"
+              ~description:{|"Descrizione — été 🚀"|} ();
+            Github_fixture.gur_repo ~owner_id:939100041L
+              ~owner_login:"podread-owner" ~id:939600412L ~name:"beta"
+              ~default_branch:"release/v1" ~archived:true ();
+            Github_fixture.gur_repo ~owner_id:939100041L
+              ~owner_login:"podread-owner" ~id:939600413L ~name:"gamma" ();
           ]
       in
       let* view = load_view "load" conn ~user:uid ~draft in
@@ -455,39 +477,41 @@ let complete_detail_case =
       let repos = Read.repositories view in
       Alcotest.(check (list string))
         "complete snapshot in position order, metadata byte-exact"
-        [ expected_sig ~position:1 ~id:939600411L ~account_id:939100041L
-            ~login:"podread-owner"
-            ~description:"Descrizione — été 🚀" "alpha"
-        ; expected_sig ~position:2 ~id:939600412L ~account_id:939100041L
-            ~login:"podread-owner" ~branch:"release/v1" ~archived:true
-            "beta"
-        ; expected_sig ~position:3 ~id:939600413L ~account_id:939100041L
-            ~login:"podread-owner" "gamma"
+        [
+          expected_sig ~position:1 ~id:939600411L ~account_id:939100041L
+            ~login:"podread-owner" ~description:"Descrizione — été 🚀" "alpha";
+          expected_sig ~position:2 ~id:939600412L ~account_id:939100041L
+            ~login:"podread-owner" ~branch:"release/v1" ~archived:true "beta";
+          expected_sig ~position:3 ~id:939600413L ~account_id:939100041L
+            ~login:"podread-owner" "gamma";
         ]
         (List.map view_sig repos);
       (* The exposed snapshot ids are the real local row ids, in the same
          order. *)
-      let* stored_ids = Db_fixture.collect conn "snapshot ids" Project_fixture.q_snapshot_ids draft in
-      Alcotest.(check (list int64)) "snapshot ids are the local row ids"
-        stored_ids
+      let* stored_ids =
+        Db_fixture.collect conn "snapshot ids" Project_fixture.q_snapshot_ids
+          draft
+      in
+      Alcotest.(check (list int64))
+        "snapshot ids are the local row ids" stored_ids
         (List.map Read.snapshot_id repos);
       Lwt.return_unit)
 
 (* === selection summary === *)
 
 let selection_summary_case =
-  db_case "read: selection and primary states summarize exactly"
-    (fun conn ->
+  db_case "read: selection and primary states summarize exactly" (fun conn ->
       let* uid = insert_user conn "podread_a" in
       let* _, draft =
         make_draft ~installation_login:"podread-account" conn ~user:uid
           ~ext_id:939000051L ~account_id:939100051L
-          [ Github_fixture.gur_repo ~owner_id:939100051L ~owner_login:"podread-owner"
-              ~id:939600511L ~name:"alpha" ()
-          ; Github_fixture.gur_repo ~owner_id:939100051L ~owner_login:"podread-owner"
-              ~id:939600512L ~name:"beta" ()
-          ; Github_fixture.gur_repo ~owner_id:939100051L ~owner_login:"podread-owner"
-              ~id:939600513L ~name:"gamma" ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100051L
+              ~owner_login:"podread-owner" ~id:939600511L ~name:"alpha" ();
+            Github_fixture.gur_repo ~owner_id:939100051L
+              ~owner_login:"podread-owner" ~id:939600512L ~name:"beta" ();
+            Github_fixture.gur_repo ~owner_id:939100051L
+              ~owner_login:"podread-owner" ~id:939600513L ~name:"gamma" ();
           ]
       in
       (* Both entry points must agree at every step. *)
@@ -517,32 +541,30 @@ let selection_summary_case =
 (* === snapshot refresh and stale ids === *)
 
 let stale_snapshot_case =
-  db_case "read: a refresh retires old snapshot ids and selection"
-    (fun conn ->
+  db_case "read: a refresh retires old snapshot ids and selection" (fun conn ->
       let* uid = insert_user conn "podread_a" in
       let* _, draft =
-        make_draft conn ~user:uid ~ext_id:939000061L
-          ~account_id:939100061L
-          [ Github_fixture.gur_repo ~owner_id:939100061L ~owner_login:"podread-owner"
-              ~id:939600611L ~name:"alpha" ()
-          ; Github_fixture.gur_repo ~owner_id:939100061L ~owner_login:"podread-owner"
-              ~id:939600612L ~name:"beta" ()
+        make_draft conn ~user:uid ~ext_id:939000061L ~account_id:939100061L
+          [
+            Github_fixture.gur_repo ~owner_id:939100061L
+              ~owner_login:"podread-owner" ~id:939600611L ~name:"alpha" ();
+            Github_fixture.gur_repo ~owner_id:939100061L
+              ~owner_login:"podread-owner" ~id:939600612L ~name:"beta" ();
           ]
       in
       let* () = Db_fixture.exec conn "select all" q_select_up_to (draft, 2) in
       let* view1 = load_view "first load" conn ~user:uid ~draft in
       let old_ids = List.map Read.snapshot_id (Read.repositories view1) in
-      Alcotest.(check int) "two original snapshot rows" 2
-        (List.length old_ids);
+      Alcotest.(check int) "two original snapshot rows" 2 (List.length old_ids);
       (* The refresh keeps one repository id but changes the set — the
          stale browser-form scenario. *)
       let* refreshed =
-        refresh_draft conn ~user:uid ~ext_id:939000061L
-          ~account_id:939100061L
-          [ Github_fixture.gur_repo ~owner_id:939100061L ~owner_login:"podread-owner"
-              ~id:939600613L ~name:"gamma" ()
-          ; Github_fixture.gur_repo ~owner_id:939100061L ~owner_login:"podread-owner"
-              ~id:939600611L ~name:"alpha" ()
+        refresh_draft conn ~user:uid ~ext_id:939000061L ~account_id:939100061L
+          [
+            Github_fixture.gur_repo ~owner_id:939100061L
+              ~owner_login:"podread-owner" ~id:939600613L ~name:"gamma" ();
+            Github_fixture.gur_repo ~owner_id:939100061L
+              ~owner_login:"podread-owner" ~id:939600611L ~name:"alpha" ();
           ]
       in
       Alcotest.(check int64) "draft id unchanged" draft refreshed;
@@ -550,16 +572,18 @@ let stale_snapshot_case =
       let repos = Read.repositories view2 in
       Alcotest.(check (list string))
         "only the new snapshot, positions restarted at 1, selection reset"
-        [ expected_sig ~position:1 ~id:939600613L ~account_id:939100061L
-            ~login:"podread-owner" "gamma"
-        ; expected_sig ~position:2 ~id:939600611L ~account_id:939100061L
-            ~login:"podread-owner" "alpha"
+        [
+          expected_sig ~position:1 ~id:939600613L ~account_id:939100061L
+            ~login:"podread-owner" "gamma";
+          expected_sig ~position:2 ~id:939600611L ~account_id:939100061L
+            ~login:"podread-owner" "alpha";
         ]
         (List.map view_sig repos);
       let new_ids = List.map Read.snapshot_id repos in
       List.iter
         (fun old_id ->
-          Alcotest.(check bool) "old snapshot id retired" false
+          Alcotest.(check bool)
+            "old snapshot id retired" false
             (List.exists (Int64.equal old_id) new_ids))
         old_ids;
       Lwt.return_unit)
@@ -576,8 +600,9 @@ let login_source_case =
         make_draft ~installation_login:"installation-login"
           ~login:"snapshot-login" conn ~user:uid ~ext_id:939000071L
           ~account_id:939100071L
-          [ Github_fixture.gur_repo ~owner_id:939100071L ~owner_login:"snapshot-login"
-              ~id:939600711L ~name:"alpha" ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100071L
+              ~owner_login:"snapshot-login" ~id:939600711L ~name:"alpha" ();
           ]
       in
       let check_logins label ~account =
@@ -586,8 +611,8 @@ let login_source_case =
         List.iter
           (fun s ->
             Alcotest.(check string)
-              (label ^ ": summary login is the installation's") account
-              (Read.account_login s))
+              (label ^ ": summary login is the installation's")
+              account (Read.account_login s))
           (Read.summary view :: summaries);
         Alcotest.(check (list string))
           (label ^ ": rows keep their snapshotted owner login")
@@ -599,41 +624,43 @@ let login_source_case =
       (* A GitHub rename updates the installation row; the read model
          must follow it without touching the snapshot. *)
       let* () =
-        Db_fixture.exec conn "rename account" Project_fixture.q_set_installation_login
-          (inst, "renamed-login")
+        Db_fixture.exec conn "rename account"
+          Project_fixture.q_set_installation_login (inst, "renamed-login")
       in
       check_logins "after rename" ~account:"renamed-login")
 
 (* === zero-repository corruption === *)
 
 let zero_repo_case =
-  db_case "read: zero-snapshot draft is unlisted, owner-only error"
-    (fun conn ->
+  db_case "read: zero-snapshot draft is unlisted, owner-only error" (fun conn ->
       let* a = insert_user conn "podread_a" in
       let* b = insert_user conn "podread_b" in
       let* _, healthy =
         make_draft conn ~user:a ~ext_id:939000081L ~account_id:939100081L
-          [ Github_fixture.gur_repo ~owner_id:939100081L ~owner_login:"podread-owner"
-              ~id:939600811L ~name:"alpha" ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100081L
+              ~owner_login:"podread-owner" ~id:939600811L ~name:"alpha" ();
           ]
       in
       let* inst2 =
         Project_fixture.insert_installation conn ~ext_id:939000082L
           ~account_id:939100082L
       in
-      let* bare = Db_fixture.find conn "bare draft" Project_fixture.q_insert_bare_draft (a, inst2) in
+      let* bare =
+        Db_fixture.find conn "bare draft" Project_fixture.q_insert_bare_draft
+          (a, inst2)
+      in
       let* summaries = list_ok "list" conn ~user:a in
       Alcotest.(check (list int64))
         "corrupted draft omitted, healthy draft intact" [ healthy ]
         (List.map Read.draft_id summaries);
       let* () =
-        load_expect "owner sees the corruption" Read.Inconsistent_data
-          conn ~user:a ~draft:bare
+        load_expect "owner sees the corruption" Read.Inconsistent_data conn
+          ~user:a ~draft:bare
       in
       (* The corruption signal is owner-only: to anyone else the id
          stays indistinguishable from a nonexistent draft. *)
-      load_none "other user still gets plain absence" conn ~user:b
-        ~draft:bare)
+      load_none "other user still gets plain absence" conn ~user:b ~draft:bare)
 
 (* === inconsistent durable data ===
    Only invariants the schema deliberately leaves to the domain are
@@ -652,12 +679,15 @@ let corruption_case name ~ext_id corrupt =
       let* uid = insert_user conn "podread_a" in
       let* _, draft =
         make_draft conn ~user:uid ~ext_id ~account_id
-          [ Github_fixture.gur_repo ~owner_id:account_id ~owner_login:"podread-owner"
-              ~id:base ~name:"alpha" ()
-          ; Github_fixture.gur_repo ~owner_id:account_id ~owner_login:"podread-owner"
-              ~id:(Int64.add base 1L) ~name:"beta" ()
-          ; Github_fixture.gur_repo ~owner_id:account_id ~owner_login:"podread-owner"
-              ~id:(Int64.add base 2L) ~name:"gamma" ()
+          [
+            Github_fixture.gur_repo ~owner_id:account_id
+              ~owner_login:"podread-owner" ~id:base ~name:"alpha" ();
+            Github_fixture.gur_repo ~owner_id:account_id
+              ~owner_login:"podread-owner" ~id:(Int64.add base 1L) ~name:"beta"
+              ();
+            Github_fixture.gur_repo ~owner_id:account_id
+              ~owner_login:"podread-owner" ~id:(Int64.add base 2L) ~name:"gamma"
+              ();
           ]
       in
       let* _ = load_view "valid before corruption" conn ~user:uid ~draft in
@@ -668,7 +698,8 @@ let corruption_case name ~ext_id corrupt =
 let corrupt_positions_case =
   corruption_case "read: non-contiguous positions are inconsistent"
     ~ext_id:939000091L (fun conn ~draft ->
-      Db_fixture.exec conn "gap positions" Project_fixture.q_delete_position (draft, 2))
+      Db_fixture.exec conn "gap positions" Project_fixture.q_delete_position
+        (draft, 2))
 
 let corrupt_full_name_case =
   corruption_case "read: full name diverging from its parts is rejected"
@@ -677,8 +708,8 @@ let corrupt_full_name_case =
         (draft, 1, "podread-owner/other"))
 
 let corrupt_html_url_case =
-  corruption_case "read: non-canonical html url is rejected"
-    ~ext_id:939000093L (fun conn ~draft ->
+  corruption_case "read: non-canonical html url is rejected" ~ext_id:939000093L
+    (fun conn ~draft ->
       Db_fixture.exec conn "malform html url" Project_fixture.q_set_html_url
         (draft, 1, "https://evil.example/podread-owner/alpha"))
 
@@ -692,26 +723,25 @@ let oversize_snapshot_case =
     (fun conn ->
       let* uid = insert_user conn "podread_a" in
       let* _, draft =
-        make_draft conn ~user:uid ~ext_id:939000095L
-          ~account_id:939100095L
-          [ Github_fixture.gur_repo ~owner_id:939100095L ~owner_login:"podread-owner"
-              ~id:939600951L ~name:"seed" ()
+        make_draft conn ~user:uid ~ext_id:939000095L ~account_id:939100095L
+          [
+            Github_fixture.gur_repo ~owner_id:939100095L
+              ~owner_login:"podread-owner" ~id:939600951L ~name:"seed" ();
           ]
       in
       (* 2,000 filler rows on top of the seed: 2,001 total. *)
       let* () = Db_fixture.exec conn "bulk rows" q_bulk_repos (draft, 2001) in
       let* () =
-        list_expect "oversize poisons the list" Read.Inconsistent_data
-          conn ~user:uid
+        list_expect "oversize poisons the list" Read.Inconsistent_data conn
+          ~user:uid
       in
-      load_expect "oversize poisons the detail" Read.Inconsistent_data
-        conn ~user:uid ~draft)
+      load_expect "oversize poisons the detail" Read.Inconsistent_data conn
+        ~user:uid ~draft)
 
 (* === credential prohibition === *)
 
 let privacy_case =
-  db_case "read: no credential material reaches any returned field"
-    (fun conn ->
+  db_case "read: no credential material reaches any returned field" (fun conn ->
       let* uid = insert_user conn "podread_a" in
       let* _ =
         Project_fixture.insert_installation ~login:"podread-account" conn
@@ -728,9 +758,10 @@ let privacy_case =
       let* set =
         Project_fixture.repo_set ~token_body:Project_fixture.refresh_token_body
           ~installation:v
-          [ Github_fixture.gur_repo ~owner_id:939100099L ~owner_login:"podread-owner"
-              ~id:939600991L ~name:"alpha"
-              ~description:{|"benign description"|} ()
+          [
+            Github_fixture.gur_repo ~owner_id:939100099L
+              ~owner_login:"podread-owner" ~id:939600991L ~name:"alpha"
+              ~description:{|"benign description"|} ();
           ]
       in
       let* stored = Project_fixture.refresh_ok "refresh" conn ~user:uid v set in
@@ -741,46 +772,64 @@ let privacy_case =
       let rendered =
         String.concat "|"
           (List.concat
-             [ List.map Read.account_login
-                 (Read.summary view :: summaries)
-             ; List.concat_map
+             [
+               List.map Read.account_login (Read.summary view :: summaries);
+               List.concat_map
                  (fun r ->
-                   [ Read.owner_login r; Read.name r; Read.full_name r
-                   ; Read.html_url r; Read.default_branch r
-                   ; (match Read.description r with
-                     | None -> ""
-                     | Some d -> d)
+                   [
+                     Read.owner_login r;
+                     Read.name r;
+                     Read.full_name r;
+                     Read.html_url r;
+                     Read.default_branch r;
+                     (match Read.description r with None -> "" | Some d -> d);
                    ])
-                 (Read.repositories view)
+                 (Read.repositories view);
              ])
       in
       List.iter
         (fun (label, needle) ->
-          Alcotest.(check bool) (label ^ " absent from returned fields")
+          Alcotest.(check bool)
+            (label ^ " absent from returned fields")
             false
             (Html_assert.contains_nonempty ~needle rendered))
-        [ ("access token", Project_fixture.pods_access_fixture)
-        ; ("refresh token", Project_fixture.pods_refresh_fixture)
-        ; ("authorization code", Github_fixture.gte_code_string)
-        ; ("PKCE verifier", Github_fixture.gte_verifier_string)
-        ; ("client secret", Github_fixture.gte_client_secret)
+        [
+          ("access token", Project_fixture.pods_access_fixture);
+          ("refresh token", Project_fixture.pods_refresh_fixture);
+          ("authorization code", Github_fixture.gte_code_string);
+          ("PKCE verifier", Github_fixture.gte_verifier_string);
+          ("client secret", Github_fixture.gte_client_secret);
         ];
       Lwt.return_unit)
 
 let suite =
-  [ invalid_input_case; empty_case; owner_isolation_case;
-    multiple_drafts_case; hidden_expired_case; hidden_completed_case;
-    hidden_cancelled_case; hidden_inaccessible_case; hidden_revoked_case;
-    hidden_revoked_at_case; complete_detail_case; selection_summary_case;
-    stale_snapshot_case; login_source_case; zero_repo_case;
-    corrupt_positions_case; corrupt_full_name_case;
-    corrupt_html_url_case; corrupt_description_case;
-    oversize_snapshot_case; privacy_case ]
+  [
+    invalid_input_case;
+    empty_case;
+    owner_isolation_case;
+    multiple_drafts_case;
+    hidden_expired_case;
+    hidden_completed_case;
+    hidden_cancelled_case;
+    hidden_inaccessible_case;
+    hidden_revoked_case;
+    hidden_revoked_at_case;
+    complete_detail_case;
+    selection_summary_case;
+    stale_snapshot_case;
+    login_source_case;
+    zero_repo_case;
+    corrupt_positions_case;
+    corrupt_full_name_case;
+    corrupt_html_url_case;
+    corrupt_description_case;
+    oversize_snapshot_case;
+    privacy_case;
+  ]
 
 let suites =
-    (* Draft read model: owner-authorized listing/loading, the
+  (* Draft read model: owner-authorized listing/loading, the
        anti-oracle collapse, and durable-data validation all read real
        Postgres rows; same EARDE_TEST_DATABASE_URL gate (each case skips
        without it). *)
-  [ ( "project_onboarding_draft_read_model", suite )
-  ]
+  [ ("project_onboarding_draft_read_model", suite) ]

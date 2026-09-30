@@ -33,16 +33,12 @@
    .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Stp = Shared_thread_placements
 module Cc = Community_connections
 module Audit = Shared_thread_placement_audit
 module Notifications = Shared_thread_notifications
 
-type decision =
-  | Accept of int option
-  | Reject
-
+type decision = Accept of int option | Reject
 type created_placement = { created_id : int64 }
 
 let created_placement_id { created_id } = created_id
@@ -57,16 +53,13 @@ type reviewed_placement = {
 }
 
 let reviewed_placement_id { reviewed_id; _ } = reviewed_id
-
 let reviewed_post_id { reviewed_post; _ } = reviewed_post
-
 let reviewed_origin_community_id { reviewed_origin; _ } = reviewed_origin
 
 let reviewed_destination_community_id { reviewed_destination; _ } =
   reviewed_destination
 
 let reviewed_status { reviewed_result; _ } = reviewed_result
-
 let reviewed_destination_section_id { reviewed_section; _ } = reviewed_section
 
 type withdrawn_placement = {
@@ -77,9 +70,7 @@ type withdrawn_placement = {
 }
 
 let withdrawn_placement_id { withdrawn_id; _ } = withdrawn_id
-
 let withdrawn_post_id { withdrawn_post; _ } = withdrawn_post
-
 let withdrawn_origin_community_id { withdrawn_origin; _ } = withdrawn_origin
 
 let withdrawn_destination_community_id { withdrawn_destination; _ } =
@@ -93,9 +84,7 @@ type removed_placement = {
 }
 
 let removed_placement_id { removed_id; _ } = removed_id
-
 let removed_post_id { removed_post; _ } = removed_post
-
 let removed_origin_community_id { removed_origin; _ } = removed_origin
 
 let removed_destination_community_id { removed_destination; _ } =
@@ -133,7 +122,7 @@ let positive id = Int64.compare id 0L > 0
 let discover_post_origin_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.int)
-  "SELECT community_id FROM posts WHERE id = $1"
+    "SELECT community_id FROM posts WHERE id = $1"
 
 (* Existence, deletion protection, and the current eligibility facts for one
    referenced community, taken in ascending id order. FOR SHARE — not the
@@ -149,12 +138,9 @@ let discover_post_origin_query =
    here and collapses only at the call site. *)
 let lock_community_query =
   let open Caqti_request.Infix in
-  (Caqti_type.int
-   ->? Caqti_type.(t2 (t2 int string) (t3 string bool bool)))
-  "SELECT id, visibility, onboarding_state, discoverable, sections_enabled \
-   FROM communities \
-   WHERE id = $1 \
-   FOR SHARE"
+  (Caqti_type.int ->? Caqti_type.(t2 (t2 int string) (t3 string bool bool)))
+    "SELECT id, visibility, onboarding_state, discoverable, sections_enabled \
+     FROM communities WHERE id = $1 FOR SHARE"
 
 (* The pair's accepted mutual connection, locked FOR SHARE so a concurrent
    connection removal (which takes the row FOR UPDATE) cannot commit between
@@ -168,13 +154,10 @@ let lock_community_query =
 let lock_accepted_connection_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.int64)
-  "SELECT id FROM community_connections \
-   WHERE LEAST(requester_community_id, recipient_community_id) \
-         = LEAST($1, $2) \
-     AND GREATEST(requester_community_id, recipient_community_id) \
-         = GREATEST($1, $2) \
-     AND status = 'accepted' \
-   FOR SHARE"
+    "SELECT id FROM community_connections WHERE LEAST(requester_community_id, \
+     recipient_community_id) = LEAST($1, $2) AND \
+     GREATEST(requester_community_id, recipient_community_id) = GREATEST($1, \
+     $2) AND status = 'accepted' FOR SHARE"
 
 (* The canonical post under FOR SHARE: existence, the immutable origin to
    re-verify, the author for notification resolution, and the content for
@@ -183,12 +166,9 @@ let lock_accepted_connection_query =
    tombstoned between this read and the commit. *)
 let lock_post_query =
   let open Caqti_request.Infix in
-  (Caqti_type.int
-   ->? Caqti_type.(t2 (t2 int int) (t2 int (option string))))
-  "SELECT id, community_id, user_id, content \
-   FROM posts \
-   WHERE id = $1 \
-   FOR SHARE"
+  (Caqti_type.int ->? Caqti_type.(t2 (t2 int int) (t2 int (option string))))
+    "SELECT id, community_id, user_id, content FROM posts WHERE id = $1 FOR \
+     SHARE"
 
 (* The chosen destination section, locked FOR SHARE so a concurrent section
    deletion (whose DELETE takes the row exclusively) cannot commit an
@@ -198,9 +178,8 @@ let lock_post_query =
 let lock_section_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.int)
-  "SELECT id FROM community_sections \
-   WHERE id = $1 AND community_id = $2 \
-   FOR SHARE"
+    "SELECT id FROM community_sections WHERE id = $1 AND community_id = $2 FOR \
+     SHARE"
 
 (* The conflict target is the partial unique active-(post, destination)
    index, written exactly as the migration declares it so PostgreSQL infers
@@ -214,18 +193,14 @@ let lock_section_query =
 let insert_placement_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t3 int int int) (t2 int (option string)))
-   ->? Caqti_type.int64)
-  "INSERT INTO shared_thread_placements \
-     (post_id, origin_community_id, destination_community_id, \
-      destination_section_id, status, requested_by_user_id, \
-      reviewed_by_user_id, removed_by_user_id, withdrawn_by_user_id, \
-      request_note, reviewed_at, removed_at, withdrawn_at) \
-   VALUES ($1, $2, $3, NULL, 'pending', $4, NULL, NULL, NULL, $5, \
-           NULL, NULL, NULL) \
-   ON CONFLICT (post_id, destination_community_id) \
-     WHERE status IN ('pending', 'accepted') \
-   DO NOTHING \
-   RETURNING id"
+  ->? Caqti_type.int64)
+    "INSERT INTO shared_thread_placements (post_id, origin_community_id, \
+     destination_community_id, destination_section_id, status, \
+     requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+     withdrawn_by_user_id, request_note, reviewed_at, removed_at, \
+     withdrawn_at) VALUES ($1, $2, $3, NULL, 'pending', $4, NULL, NULL, NULL, \
+     $5, NULL, NULL, NULL) ON CONFLICT (post_id, destination_community_id) \
+     WHERE status IN ('pending', 'accepted') DO NOTHING RETURNING id"
 
 (* The exact subjects of one row, read WITHOUT a lock, solely to fix the
    lock order — one variant per subject boundary (destination for review,
@@ -233,24 +208,23 @@ let insert_placement_query =
 let discover_pending_for_destination_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.(t3 int int int))
-  "SELECT post_id, origin_community_id, destination_community_id \
-   FROM shared_thread_placements \
-   WHERE id = $1 AND destination_community_id = $2 AND status = 'pending'"
+    "SELECT post_id, origin_community_id, destination_community_id FROM \
+     shared_thread_placements WHERE id = $1 AND destination_community_id = $2 \
+     AND status = 'pending'"
 
 let discover_pending_for_origin_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.(t3 int int int))
-  "SELECT post_id, origin_community_id, destination_community_id \
-   FROM shared_thread_placements \
-   WHERE id = $1 AND origin_community_id = $2 AND status = 'pending'"
+    "SELECT post_id, origin_community_id, destination_community_id FROM \
+     shared_thread_placements WHERE id = $1 AND origin_community_id = $2 AND \
+     status = 'pending'"
 
 let discover_accepted_for_member_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.(t3 int int int))
-  "SELECT post_id, origin_community_id, destination_community_id \
-   FROM shared_thread_placements \
-   WHERE id = $1 AND status = 'accepted' \
-     AND (origin_community_id = $2 OR destination_community_id = $2)"
+    "SELECT post_id, origin_community_id, destination_community_id FROM \
+     shared_thread_placements WHERE id = $1 AND status = 'accepted' AND \
+     (origin_community_id = $2 OR destination_community_id = $2)"
 
 (* The exact pending placement under its subject boundary, locked as the
    only durable row this transaction mutates. Every zero-row cause (no
@@ -260,22 +234,20 @@ let discover_accepted_for_member_query =
 let lock_pending_placement_query boundary_column =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 int int))
-           (t2
-              (t2 (option string) (option int))
-              (t2 (t4 bool bool bool bool) (t3 bool bool bool)))))
-  (Printf.sprintf
-     "SELECT id, post_id, origin_community_id, destination_community_id, \
-             request_note, requested_by_user_id, \
-             reviewed_by_user_id IS NULL, removed_by_user_id IS NULL, \
-             withdrawn_by_user_id IS NULL, destination_section_id IS NULL, \
-             reviewed_at IS NULL, removed_at IS NULL, withdrawn_at IS NULL \
-      FROM shared_thread_placements \
-      WHERE id = $1 AND %s = $2 AND status = 'pending' \
-      FOR UPDATE"
-     boundary_column)
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 int int))
+          (t2
+             (t2 (option string) (option int))
+             (t2 (t4 bool bool bool bool) (t3 bool bool bool)))))
+    (Printf.sprintf
+       "SELECT id, post_id, origin_community_id, destination_community_id, \
+        request_note, requested_by_user_id, reviewed_by_user_id IS NULL, \
+        removed_by_user_id IS NULL, withdrawn_by_user_id IS NULL, \
+        destination_section_id IS NULL, reviewed_at IS NULL, removed_at IS \
+        NULL, withdrawn_at IS NULL FROM shared_thread_placements WHERE id = $1 \
+        AND %s = $2 AND status = 'pending' FOR UPDATE"
+       boundary_column)
 
 (* boundary_column is one of two literals written in this file — never
    caller input — so the closed-variant discipline over dynamic SQL holds. *)
@@ -288,21 +260,18 @@ let lock_pending_for_origin_query =
 let lock_accepted_placement_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 int int))
-           (t2
-              (t2 (option string) (option int))
-              (t2 (t2 (option int) bool) (t3 bool bool bool)))))
-  "SELECT id, post_id, origin_community_id, destination_community_id, \
-          request_note, requested_by_user_id, \
-          reviewed_by_user_id, removed_by_user_id IS NULL, \
-          withdrawn_by_user_id IS NULL, \
-          reviewed_at IS NOT NULL, removed_at IS NULL, withdrawn_at IS NULL \
-   FROM shared_thread_placements \
-   WHERE id = $1 AND status = 'accepted' \
-     AND (origin_community_id = $2 OR destination_community_id = $2) \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 int int))
+          (t2
+             (t2 (option string) (option int))
+             (t2 (t2 (option int) bool) (t3 bool bool bool)))))
+    "SELECT id, post_id, origin_community_id, destination_community_id, \
+     request_note, requested_by_user_id, reviewed_by_user_id, \
+     removed_by_user_id IS NULL, withdrawn_by_user_id IS NULL, reviewed_at IS \
+     NOT NULL, removed_at IS NULL, withdrawn_at IS NULL FROM \
+     shared_thread_placements WHERE id = $1 AND status = 'accepted' AND \
+     (origin_community_id = $2 OR destination_community_id = $2) FOR UPDATE"
 
 (* The one review mutation: the locked row, guarded again on both the
    pending status and the expected destination, so a zero count is a
@@ -316,19 +285,13 @@ let lock_accepted_placement_query =
 let review_placement_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int64 string) (t3 int int (option int)))
-   ->* Caqti_type.(t2 int64 string))
-  "UPDATE shared_thread_placements \
-   SET status = $2, \
-       reviewed_by_user_id = $3, \
-       reviewed_at = GREATEST(NOW(), created_at), \
-       destination_section_id = $5, \
-       removed_by_user_id = NULL, \
-       removed_at = NULL, \
-       withdrawn_by_user_id = NULL, \
-       withdrawn_at = NULL, \
-       updated_at = GREATEST(NOW(), created_at) \
-   WHERE id = $1 AND status = 'pending' AND destination_community_id = $4 \
-   RETURNING id, status"
+  ->* Caqti_type.(t2 int64 string))
+    "UPDATE shared_thread_placements SET status = $2, reviewed_by_user_id = \
+     $3, reviewed_at = GREATEST(NOW(), created_at), destination_section_id = \
+     $5, removed_by_user_id = NULL, removed_at = NULL, withdrawn_by_user_id = \
+     NULL, withdrawn_at = NULL, updated_at = GREATEST(NOW(), created_at) WHERE \
+     id = $1 AND status = 'pending' AND destination_community_id = $4 \
+     RETURNING id, status"
 
 (* The one withdrawal mutation, guarded on the pending status and the
    origin boundary. Review and removal columns are written NULL explicitly:
@@ -337,19 +300,13 @@ let review_placement_query =
 let withdraw_placement_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int64 string) (t2 int int))
-   ->* Caqti_type.(t2 int64 string))
-  "UPDATE shared_thread_placements \
-   SET status = $2, \
-       withdrawn_by_user_id = $3, \
-       withdrawn_at = GREATEST(NOW(), created_at), \
-       reviewed_by_user_id = NULL, \
-       reviewed_at = NULL, \
-       removed_by_user_id = NULL, \
-       removed_at = NULL, \
-       destination_section_id = NULL, \
-       updated_at = GREATEST(NOW(), created_at) \
-   WHERE id = $1 AND status = 'pending' AND origin_community_id = $4 \
-   RETURNING id, status"
+  ->* Caqti_type.(t2 int64 string))
+    "UPDATE shared_thread_placements SET status = $2, withdrawn_by_user_id = \
+     $3, withdrawn_at = GREATEST(NOW(), created_at), reviewed_by_user_id = \
+     NULL, reviewed_at = NULL, removed_by_user_id = NULL, removed_at = NULL, \
+     destination_section_id = NULL, updated_at = GREATEST(NOW(), created_at) \
+     WHERE id = $1 AND status = 'pending' AND origin_community_id = $4 \
+     RETURNING id, status"
 
 (* The one removal mutation, guarded again on the accepted status and on
    the acting community's membership in the pair. reviewed_at is NOT NULL
@@ -361,15 +318,12 @@ let withdraw_placement_query =
 let remove_placement_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 int64 string) (t2 int int))
-   ->* Caqti_type.(t2 int64 string))
-  "UPDATE shared_thread_placements \
-   SET status = $2, \
-       removed_by_user_id = $3, \
-       removed_at = GREATEST(NOW(), created_at, reviewed_at), \
-       updated_at = GREATEST(NOW(), created_at, reviewed_at) \
-   WHERE id = $1 AND status = 'accepted' \
-     AND (origin_community_id = $4 OR destination_community_id = $4) \
-   RETURNING id, status"
+  ->* Caqti_type.(t2 int64 string))
+    "UPDATE shared_thread_placements SET status = $2, removed_by_user_id = $3, \
+     removed_at = GREATEST(NOW(), created_at, reviewed_at), updated_at = \
+     GREATEST(NOW(), created_at, reviewed_at) WHERE id = $1 AND status = \
+     'accepted' AND (origin_community_id = $4 OR destination_community_id = \
+     $4) RETURNING id, status"
 
 (* === shared helpers === *)
 
@@ -387,8 +341,7 @@ let with_locked_community (module C : Caqti_lwt.CONNECTION) ~rollback_to id k =
          probe community existence. *)
       rollback_to Community_unavailable
   | Ok
-      (Some
-        ((row_id, visibility_raw), (onboarding_raw, discoverable, sections)))
+      (Some ((row_id, visibility_raw), (onboarding_raw, discoverable, sections)))
     -> (
       match
         ( row_id = id && row_id > 0,
@@ -430,8 +383,7 @@ let with_locked_accepted_connection (module C : Caqti_lwt.CONNECTION)
   | Error _ -> rollback_to Storage_error
   | Ok None -> rollback_to No_accepted_connection
   | Ok (Some connection_id) ->
-      if positive connection_id then k ()
-      else rollback_to Inconsistent_data
+      if positive connection_id then k () else rollback_to Inconsistent_data
 
 (* The canonical post under the held community locks. [missing] is the
    caller's collapse for a vanished post: Post_unavailable on a request,
@@ -561,8 +513,10 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~post_id
                   with_locked_pair
                     (module C)
                     ~rollback_to ~origin ~destination:destination_community_id
-                    (fun ~origin_eligible ~destination_eligible
-                         ~destination_sections_enabled:_ ->
+                    (fun ~origin_eligible
+                         ~destination_eligible
+                         ~destination_sections_enabled:_
+                       ->
                       (* The accepted connection is the standing between the
                          two communities this whole feature rides on; locked
                          FOR SHARE so a concurrent disconnect cannot slip
@@ -581,8 +535,8 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~post_id
                                    between discovery and lock is corruption,
                                    not a race. *)
                                 rollback_to Inconsistent_data
-                              else if Stp.post_content_tombstoned content
-                              then rollback_to Post_tombstoned
+                              else if Stp.post_content_tombstoned content then
+                                rollback_to Post_tombstoned
                               else if not origin_eligible then
                                 (* Creating a placement requires both sides
                                    currently eligible, revalidated here
@@ -595,10 +549,9 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~post_id
                                 rollback_to Destination_ineligible
                               else
                                 C.find_opt insert_placement_query
-                                  ( (post_id, origin,
-                                     destination_community_id),
-                                    (actor_user_id,
-                                     Stp.request_note placement) )
+                                  ( (post_id, origin, destination_community_id),
+                                    (actor_user_id, Stp.request_note placement)
+                                  )
                                 >>= function
                                 | Error _ -> rollback_to Storage_error
                                 | Ok None ->
@@ -656,8 +609,7 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~post_id
                                                       Lwt.return
                                                         (Ok
                                                            {
-                                                             created_id =
-                                                               new_id;
+                                                             created_id = new_id;
                                                            })))))))))
 
 (* === review === *)
@@ -669,8 +621,7 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~post_id
 let pending_row_ok ~row ~placement_id ~post ~origin ~destination =
   let ( ((row_id, row_post), (row_origin, row_destination)),
         ( (_note, requested_by),
-          ( (reviewed_by_null, removed_by_null, withdrawn_by_null,
-             section_null),
+          ( (reviewed_by_null, removed_by_null, withdrawn_by_null, section_null),
             (reviewed_at_null, removed_at_null, withdrawn_at_null) ) ) ) =
     row
   in
@@ -684,11 +635,11 @@ let pending_row_ok ~row ~placement_id ~post ~origin ~destination =
   && reviewed_at_null && removed_at_null && withdrawn_at_null
 
 let pending_row_note ~row =
-  let (_, ((note, _), _)) = row in
+  let _, ((note, _), _) = row in
   note
 
 let pending_row_requester ~row =
-  let (_, ((_, requested_by), _)) = row in
+  let _, ((_, requested_by), _) = row in
   requested_by
 
 let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
@@ -698,9 +649,8 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
     Lwt.return (Error Invalid_placement_id)
   else if destination_community_id <= 0 then
     Lwt.return (Error Invalid_community_id)
-  else if
-    match decision with Accept (Some sid) -> sid <= 0 | _ -> false
-  then Lwt.return (Error Invalid_destination_section)
+  else if match decision with Accept (Some sid) -> sid <= 0 | _ -> false then
+    Lwt.return (Error Invalid_destination_section)
   else
     let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
     C.start () >>= function
@@ -722,8 +672,10 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
               with_locked_pair
                 (module C)
                 ~rollback_to ~origin ~destination
-                (fun ~origin_eligible ~destination_eligible
-                     ~destination_sections_enabled ->
+                (fun ~origin_eligible
+                     ~destination_eligible
+                     ~destination_sections_enabled
+                   ->
                   (* Accepting creates the destination placement, so it
                      needs the standing connection, the live canonical
                      content, current eligibility on both sides, and a
@@ -749,125 +701,129 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
                         | Ok found -> k ~connection:found)
                   in
                   with_connection_locked (fun ~connection ->
-                  let with_accept_gates k =
-                    match decision with
-                    | Reject -> k ~section:None
-                    | Accept section -> (
-                        match connection with
-                        | None -> rollback_to No_accepted_connection
-                        | Some connection_id
-                          when not (positive connection_id) ->
-                            rollback_to Inconsistent_data
-                        | Some _ ->
-                            if not destination_eligible then
-                              (* The reviewing community is answered first —
+                      let with_accept_gates k =
+                        match decision with
+                        | Reject -> k ~section:None
+                        | Accept section -> (
+                            match connection with
+                            | None -> rollback_to No_accepted_connection
+                            | Some connection_id
+                              when not (positive connection_id) ->
+                                rollback_to Inconsistent_data
+                            | Some _ -> (
+                                if not destination_eligible then
+                                  (* The reviewing community is answered first —
                                  that is the one its own moderators are
                                  entitled to hear about. *)
-                              rollback_to Destination_ineligible
-                            else if not origin_eligible then
-                              rollback_to Origin_ineligible
-                            else if destination_sections_enabled then
-                              match section with
-                              | None ->
-                                  (* A sectioned destination must choose
+                                  rollback_to Destination_ineligible
+                                else if not origin_eligible then
+                                  rollback_to Origin_ineligible
+                                else if destination_sections_enabled then
+                                  match section with
+                                  | None ->
+                                      (* A sectioned destination must choose
                                      where the thread lands, exactly as its
                                      own composer must. *)
-                                  rollback_to Invalid_destination_section
-                              | Some sid -> (
-                                  C.find_opt lock_section_query
-                                    (sid, destination)
-                                  >>= function
-                                  | Error _ -> rollback_to Storage_error
-                                  | Ok None ->
-                                      (* Missing and another community's
+                                      rollback_to Invalid_destination_section
+                                  | Some sid -> (
+                                      C.find_opt lock_section_query
+                                        (sid, destination)
+                                      >>= function
+                                      | Error _ -> rollback_to Storage_error
+                                      | Ok None ->
+                                          (* Missing and another community's
                                          section collapse alike: the
                                          boundary is generic. *)
-                                      rollback_to Invalid_destination_section
-                                  | Ok (Some locked_sid) ->
-                                      if locked_sid = sid then
-                                        k ~section:(Some sid)
-                                      else rollback_to Inconsistent_data)
-                            else
-                              match section with
-                              | Some _ ->
-                                  (* A flat destination has no section to
+                                          rollback_to
+                                            Invalid_destination_section
+                                      | Ok (Some locked_sid) ->
+                                          if locked_sid = sid then
+                                            k ~section:(Some sid)
+                                          else rollback_to Inconsistent_data)
+                                else
+                                  match section with
+                                  | Some _ ->
+                                      (* A flat destination has no section to
                                      accept into; a supplied one is refused
                                      rather than silently dropped. *)
-                                  rollback_to Invalid_destination_section
-                              | None -> k ~section:None)
-                  in
-                  (* The post is read under lock for both decisions: the
+                                      rollback_to Invalid_destination_section
+                                  | None -> k ~section:None))
+                      in
+                      (* The post is read under lock for both decisions: the
                      tombstone rule gates acceptance only, but the thread
                      author is a review-outcome recipient either way. A
                      vanished post implies vanished placements (CASCADE), so
                      the collapse is the same as a vanished placement. *)
-                  with_locked_post
-                    (module C)
-                    ~rollback_to ~missing:Review_unavailable ~post_id:post
-                    (fun ~post_community ~author ~content ->
-                      if post_community <> origin then
-                        rollback_to Inconsistent_data
-                      else if
-                        (match decision with
-                        | Accept _ -> Stp.post_content_tombstoned content
-                        | Reject -> false)
-                      then rollback_to Post_tombstoned
-                      else
-                        with_accept_gates (fun ~section ->
-                            C.find_opt lock_pending_for_destination_query
-                              (placement_id, destination)
-                            >>= function
-                            | Error _ -> rollback_to Storage_error
-                            | Ok None -> rollback_to Review_unavailable
-                            | Ok (Some row) -> (
-                                let target =
-                                  match decision with
-                                  | Accept _ -> Stp.Accepted
-                                  | Reject -> Stp.Rejected
-                                in
-                                match
-                                  ( pending_row_ok ~row ~placement_id ~post
-                                      ~origin ~destination,
-                                    reconstruct ~post ~origin ~destination
-                                      ~note:(pending_row_note ~row) ~target )
-                                with
-                                | false, _ | _, None ->
-                                    rollback_to Inconsistent_data
-                                | true, Some reviewed -> (
-                                    let new_status = Stp.status reviewed in
-                                    let status_string =
-                                      Stp.string_of_status new_status
+                      with_locked_post
+                        (module C)
+                        ~rollback_to ~missing:Review_unavailable ~post_id:post
+                        (fun ~post_community ~author ~content ->
+                          if post_community <> origin then
+                            rollback_to Inconsistent_data
+                          else if
+                            match decision with
+                            | Accept _ -> Stp.post_content_tombstoned content
+                            | Reject -> false
+                          then rollback_to Post_tombstoned
+                          else
+                            with_accept_gates (fun ~section ->
+                                C.find_opt lock_pending_for_destination_query
+                                  (placement_id, destination)
+                                >>= function
+                                | Error _ -> rollback_to Storage_error
+                                | Ok None -> rollback_to Review_unavailable
+                                | Ok (Some row) -> (
+                                    let target =
+                                      match decision with
+                                      | Accept _ -> Stp.Accepted
+                                      | Reject -> Stp.Rejected
                                     in
-                                    C.collect_list review_placement_query
-                                      ( (placement_id, status_string),
-                                        (reviewer_user_id, destination,
-                                         section) )
-                                    >>= function
-                                    | Error _ -> rollback_to Storage_error
-                                    | Ok [] -> rollback_to Review_unavailable
-                                    | Ok [ (updated_id, updated_status) ] ->
-                                        if
-                                          not
-                                            (Int64.equal updated_id
-                                               placement_id
-                                            && String.equal updated_status
-                                                 status_string)
-                                        then rollback_to Inconsistent_data
-                                        else
-                                          with_audit
-                                            (module C)
-                                            ~rollback_to
-                                            ~action:
-                                              (match decision with
-                                              | Accept _ ->
-                                                  Audit.Placement_accepted
-                                              | Reject ->
-                                                  Audit.Placement_rejected)
-                                            ~actor_user_id:reviewer_user_id
-                                            ~placement_id ~post_id:post
-                                            ~origin ~destination
-                                            (fun () ->
-                                              (* A review answers the origin
+                                    match
+                                      ( pending_row_ok ~row ~placement_id ~post
+                                          ~origin ~destination,
+                                        reconstruct ~post ~origin ~destination
+                                          ~note:(pending_row_note ~row) ~target
+                                      )
+                                    with
+                                    | false, _ | _, None ->
+                                        rollback_to Inconsistent_data
+                                    | true, Some reviewed -> (
+                                        let new_status = Stp.status reviewed in
+                                        let status_string =
+                                          Stp.string_of_status new_status
+                                        in
+                                        C.collect_list review_placement_query
+                                          ( (placement_id, status_string),
+                                            ( reviewer_user_id,
+                                              destination,
+                                              section ) )
+                                        >>= function
+                                        | Error _ -> rollback_to Storage_error
+                                        | Ok [] ->
+                                            rollback_to Review_unavailable
+                                        | Ok [ (updated_id, updated_status) ] ->
+                                            if
+                                              not
+                                                (Int64.equal updated_id
+                                                   placement_id
+                                                && String.equal updated_status
+                                                     status_string)
+                                            then rollback_to Inconsistent_data
+                                            else
+                                              with_audit
+                                                (module C)
+                                                ~rollback_to
+                                                ~action:
+                                                  (match decision with
+                                                  | Accept _ ->
+                                                      Audit.Placement_accepted
+                                                  | Reject ->
+                                                      Audit.Placement_rejected)
+                                                ~actor_user_id:reviewer_user_id
+                                                ~placement_id ~post_id:post
+                                                ~origin ~destination
+                                                (fun () ->
+                                                  (* A review answers the origin
                                                  side: the requester and the
                                                  thread author both hear the
                                                  outcome — the author even
@@ -876,54 +832,57 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
                                                  origin context. The
                                                  reviewing side is not
                                                  notified: it just acted. *)
-                                              let origin_side =
-                                                (match
-                                                   pending_row_requester ~row
-                                                 with
-                                                | Some requester ->
-                                                    [ (requester, origin) ]
-                                                | None -> [])
-                                                @ [ (author, origin) ]
-                                              in
-                                              with_notifications
-                                                (module C)
-                                                ~rollback_to
-                                                ~kind:
-                                                  (match decision with
-                                                  | Accept _ ->
-                                                      Notifications
-                                                      .Placement_accepted
-                                                  | Reject ->
-                                                      Notifications
-                                                      .Placement_rejected)
-                                                ~actor_user_id:
-                                                  reviewer_user_id
-                                                ~placement_id
-                                                ~recipients:origin_side
-                                                (fun () ->
-                                                  C.commit () >>= function
-                                                  | Error _ ->
-                                                      Lwt.return
-                                                        (Error Storage_error)
-                                                  | Ok () ->
-                                                      Lwt.return
-                                                        (Ok
-                                                           {
-                                                             reviewed_id =
-                                                               placement_id;
-                                                             reviewed_post =
-                                                               post;
-                                                             reviewed_origin =
-                                                               origin;
-                                                             reviewed_destination =
-                                                               destination;
-                                                             reviewed_result =
-                                                               new_status;
-                                                             reviewed_section =
-                                                               section;
-                                                           })))
-                                    | Ok (_ :: _ :: _) ->
-                                        rollback_to Inconsistent_data)))))))
+                                                  let origin_side =
+                                                    (match
+                                                       pending_row_requester
+                                                         ~row
+                                                     with
+                                                      | Some requester ->
+                                                          [
+                                                            (requester, origin);
+                                                          ]
+                                                      | None -> [])
+                                                    @ [ (author, origin) ]
+                                                  in
+                                                  with_notifications
+                                                    (module C)
+                                                    ~rollback_to
+                                                    ~kind:
+                                                      (match decision with
+                                                      | Accept _ ->
+                                                          Notifications
+                                                          .Placement_accepted
+                                                      | Reject ->
+                                                          Notifications
+                                                          .Placement_rejected)
+                                                    ~actor_user_id:
+                                                      reviewer_user_id
+                                                    ~placement_id
+                                                    ~recipients:origin_side
+                                                    (fun () ->
+                                                      C.commit () >>= function
+                                                      | Error _ ->
+                                                          Lwt.return
+                                                            (Error Storage_error)
+                                                      | Ok () ->
+                                                          Lwt.return
+                                                            (Ok
+                                                               {
+                                                                 reviewed_id =
+                                                                   placement_id;
+                                                                 reviewed_post =
+                                                                   post;
+                                                                 reviewed_origin =
+                                                                   origin;
+                                                                 reviewed_destination =
+                                                                   destination;
+                                                                 reviewed_result =
+                                                                   new_status;
+                                                                 reviewed_section =
+                                                                   section;
+                                                               })))
+                                        | Ok (_ :: _ :: _) ->
+                                            rollback_to Inconsistent_data)))))))
 
 (* === withdraw === *)
 
@@ -932,8 +891,7 @@ let withdraw (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
   if actor_user_id <= 0 then Lwt.return (Error Invalid_user_id)
   else if not (positive placement_id) then
     Lwt.return (Error Invalid_placement_id)
-  else if origin_community_id <= 0 then
-    Lwt.return (Error Invalid_community_id)
+  else if origin_community_id <= 0 then Lwt.return (Error Invalid_community_id)
   else
     let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
     C.start () >>= function
@@ -959,10 +917,11 @@ let withdraw (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
               with_locked_pair
                 (module C)
                 ~rollback_to ~origin ~destination
-                (fun ~origin_eligible:_ ~destination_eligible:_
-                     ~destination_sections_enabled:_ ->
-                  C.find_opt lock_pending_for_origin_query
-                    (placement_id, origin)
+                (fun ~origin_eligible:_
+                     ~destination_eligible:_
+                     ~destination_sections_enabled:_
+                   ->
+                  C.find_opt lock_pending_for_origin_query (placement_id, origin)
                   >>= function
                   | Error _ -> rollback_to Storage_error
                   | Ok None -> rollback_to Withdrawal_unavailable
@@ -971,8 +930,8 @@ let withdraw (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                         ( pending_row_ok ~row ~placement_id ~post ~origin
                             ~destination,
                           reconstruct ~post ~origin ~destination
-                            ~note:(pending_row_note ~row)
-                            ~target:Stp.Withdrawn )
+                            ~note:(pending_row_note ~row) ~target:Stp.Withdrawn
+                        )
                       with
                       | false, _ | _, None -> rollback_to Inconsistent_data
                       | true, Some withdrawn -> (
@@ -989,14 +948,12 @@ let withdraw (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                               if
                                 not
                                   (Int64.equal updated_id placement_id
-                                  && String.equal updated_status
-                                       status_string)
+                                  && String.equal updated_status status_string)
                               then rollback_to Inconsistent_data
                               else
                                 with_audit
                                   (module C)
-                                  ~rollback_to
-                                  ~action:Audit.Placement_withdrawn
+                                  ~rollback_to ~action:Audit.Placement_withdrawn
                                   ~actor_user_id ~placement_id ~post_id:post
                                   ~origin ~destination
                                   (fun () ->
@@ -1017,14 +974,12 @@ let withdraw (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                                           ~actor_user_id ~placement_id
                                           ~recipients:
                                             (List.map
-                                               (fun user ->
-                                                 (user, destination))
+                                               (fun user -> (user, destination))
                                                destination_mods)
                                           (fun () ->
                                             C.commit () >>= function
                                             | Error _ ->
-                                                Lwt.return
-                                                  (Error Storage_error)
+                                                Lwt.return (Error Storage_error)
                                             | Ok () ->
                                                 Lwt.return
                                                   (Ok
@@ -1032,13 +987,12 @@ let withdraw (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                                                        withdrawn_id =
                                                          placement_id;
                                                        withdrawn_post = post;
-                                                       withdrawn_origin =
-                                                         origin;
+                                                       withdrawn_origin = origin;
                                                        withdrawn_destination =
                                                          destination;
                                                      }))))
-                          | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data
-                          ))))
+                          | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data)))
+        )
 
 (* === remove === *)
 
@@ -1047,8 +1001,7 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
   if actor_user_id <= 0 then Lwt.return (Error Invalid_user_id)
   else if not (positive placement_id) then
     Lwt.return (Error Invalid_placement_id)
-  else if acting_community_id <= 0 then
-    Lwt.return (Error Invalid_community_id)
+  else if acting_community_id <= 0 then Lwt.return (Error Invalid_community_id)
   else
     let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
     C.start () >>= function
@@ -1069,15 +1022,17 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
             if
               post <= 0 || origin <= 0 || destination <= 0
               || origin = destination
-              || (origin <> acting_community_id
-                 && destination <> acting_community_id)
+              || origin <> acting_community_id
+                 && destination <> acting_community_id
             then rollback_to Inconsistent_data
             else
               with_locked_pair
                 (module C)
                 ~rollback_to ~origin ~destination
-                (fun ~origin_eligible:_ ~destination_eligible:_
-                     ~destination_sections_enabled:_ ->
+                (fun ~origin_eligible:_
+                     ~destination_eligible:_
+                     ~destination_sections_enabled:_
+                   ->
                   (* The post is read under lock only for the author, who is
                      a removal recipient; its content is deliberately not
                      judged. A vanished post implies vanished placements
@@ -1096,23 +1051,23 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                         | Ok None -> rollback_to Removal_unavailable
                         | Ok
                             (Some
-                              ( ((row_id, row_post),
-                                 (row_origin, row_destination)),
-                                ( (stored_note, requested_by),
-                                  ( (reviewed_by, removed_by_null),
-                                    ( reviewed_at_present,
-                                      removed_at_null,
-                                      withdrawn_at_null ) ) ) )) -> (
+                               ( ( (row_id, row_post),
+                                   (row_origin, row_destination) ),
+                                 ( (stored_note, requested_by),
+                                   ( (reviewed_by, removed_by_null),
+                                     ( reviewed_at_present,
+                                       removed_at_null,
+                                       withdrawn_at_null ) ) ) )) -> (
                             let row_shape_ok =
                               Int64.equal row_id placement_id
                               && row_post = post && row_origin = origin
                               && row_destination = destination
                               && (match requested_by with
-                                 | None -> true
-                                 | Some id -> id > 0)
+                                | None -> true
+                                | Some id -> id > 0)
                               && (match reviewed_by with
-                                 | None -> true
-                                 | Some id -> id > 0)
+                                | None -> true
+                                | Some id -> id > 0)
                               && removed_by_null && reviewed_at_present
                               && removed_at_null && withdrawn_at_null
                             in
@@ -1177,8 +1132,9 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                                                       origin_mods
                                                     @ (match requested_by with
                                                       | Some requester ->
-                                                          [ (requester,
-                                                             origin) ]
+                                                          [
+                                                            (requester, origin);
+                                                          ]
                                                       | None -> [])
                                                     @ [ (author, origin) ]
                                                     @ List.map
@@ -1192,15 +1148,13 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~placement_id
                                                     ~kind:
                                                       Notifications
                                                       .Placement_removed
-                                                    ~actor_user_id
-                                                    ~placement_id ~recipients
+                                                    ~actor_user_id ~placement_id
+                                                    ~recipients
                                                     (fun () ->
-                                                      C.commit ()
-                                                      >>= function
+                                                      C.commit () >>= function
                                                       | Error _ ->
                                                           Lwt.return
-                                                            (Error
-                                                               Storage_error)
+                                                            (Error Storage_error)
                                                       | Ok () ->
                                                           Lwt.return
                                                             (Ok

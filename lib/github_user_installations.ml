@@ -7,9 +7,7 @@
    and nothing in this module logs — see the .mli for the privacy
    contract. *)
 
-type account_type =
-  | User
-  | Organization
+type account_type = User | Organization
 
 type verified_installation = {
   id : int64;
@@ -82,8 +80,7 @@ module Cohttp_transport : TRANSPORT = struct
     Lwt.catch
       (fun () -> Lwt.pick [ request (); timeout () ])
       (function
-        | Lwt.Canceled -> Lwt.reraise Lwt.Canceled
-        | _ -> Lwt.return (Error ()))
+        | Lwt.Canceled -> Lwt.reraise Lwt.Canceled | _ -> Lwt.return (Error ()))
 end
 
 type error =
@@ -107,7 +104,10 @@ let max_pages = 5
 let page_uri page =
   Uri.make ~scheme:"https" ~host:"api.github.com" ~path:"/user/installations"
     ~query:
-      [ ("per_page", [ string_of_int per_page ]); ("page", [ string_of_int page ]) ]
+      [
+        ("per_page", [ string_of_int per_page ]);
+        ("page", [ string_of_int page ]);
+      ]
     ()
 
 (* The token rides only in the Authorization header, never in the URI. *)
@@ -220,10 +220,11 @@ let parse_page ~requested body =
   match Yojson.Safe.from_string body with
   | exception _ -> Error Invalid_response
   | `Assoc fields -> (
-      (* Yojson preserves duplicate keys in `Assoc`; a duplicated recognized
+      if
+        (* Yojson preserves duplicate keys in `Assoc`; a duplicated recognized
          key makes the response ambiguous, so it is rejected before any
          field is interpreted. Unknown top-level keys stay ignored. *)
-      if List.exists (fun key -> occurrences fields key > 1) recognized_keys
+        List.exists (fun key -> occurrences fields key > 1) recognized_keys
       then Error Invalid_response
       else
         match
@@ -247,8 +248,8 @@ let parse_page ~requested body =
         | _ -> Error Invalid_response)
   | _ -> Error Invalid_response
 
-let verify ~transport:(module Transport : TRANSPORT) ~token_set
-    ~installation_id =
+let verify ~transport:(module Transport : TRANSPORT) ~token_set ~installation_id
+    =
   if Int64.compare installation_id 0L <= 0 then
     (* Rejected before any request: an invalid ID must not cost a network
        round-trip carrying the token. *)

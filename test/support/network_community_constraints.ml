@@ -16,42 +16,36 @@ open Caqti_request.Infix
 let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let drop_statements =
-  [ ddl
-      "ALTER TABLE communities \
-       DROP CONSTRAINT IF EXISTS communities_network_name_check"
-  ; ddl
-      "ALTER TABLE communities \
-       DROP CONSTRAINT IF EXISTS communities_network_slug_check"
-  ; ddl
-      "ALTER TABLE communities \
-       DROP CONSTRAINT IF EXISTS communities_network_description_check"
+  [
+    ddl
+      "ALTER TABLE communities DROP CONSTRAINT IF EXISTS \
+       communities_network_name_check";
+    ddl
+      "ALTER TABLE communities DROP CONSTRAINT IF EXISTS \
+       communities_network_slug_check";
+    ddl
+      "ALTER TABLE communities DROP CONSTRAINT IF EXISTS \
+       communities_network_description_check";
   ]
 
 let add_statements =
-  [ ddl
-      "ALTER TABLE communities \
-       ADD CONSTRAINT communities_network_name_check CHECK ( \
-         NOT is_network_community OR ( \
-           char_length(name) >= 1 \
-           AND char_length(name) <= 120 \
-           AND name !~ '[\\x01-\\x1f\\x7f]' \
-           AND name !~ '^ ' \
-           AND name !~ ' $'))"
-  ; ddl
-      "ALTER TABLE communities \
-       ADD CONSTRAINT communities_network_slug_check CHECK ( \
-         NOT is_network_community OR ( \
-           slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' \
-           AND char_length(slug) <= 80))"
-  ; ddl
-      "ALTER TABLE communities \
-       ADD CONSTRAINT communities_network_description_check CHECK ( \
-         NOT is_network_community OR description IS NULL OR ( \
-           char_length(description) >= 1 \
-           AND char_length(description) <= 2000 \
-           AND description !~ '[\\x01-\\x08\\x0b-\\x1f\\x7f]' \
-           AND description !~ '^[ \\t\\n]' \
-           AND description !~ '[ \\t\\n]$'))"
+  [
+    ddl
+      "ALTER TABLE communities ADD CONSTRAINT communities_network_name_check \
+       CHECK ( NOT is_network_community OR ( char_length(name) >= 1 AND \
+       char_length(name) <= 120 AND name !~ '[\\x01-\\x1f\\x7f]' AND name !~ \
+       '^ ' AND name !~ ' $'))";
+    ddl
+      "ALTER TABLE communities ADD CONSTRAINT communities_network_slug_check \
+       CHECK ( NOT is_network_community OR ( slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' \
+       AND char_length(slug) <= 80))";
+    ddl
+      "ALTER TABLE communities ADD CONSTRAINT \
+       communities_network_description_check CHECK ( NOT is_network_community \
+       OR description IS NULL OR ( char_length(description) >= 1 AND \
+       char_length(description) <= 2000 AND description !~ \
+       '[\\x01-\\x08\\x0b-\\x1f\\x7f]' AND description !~ '^[ \\t\\n]' AND \
+       description !~ '[ \\t\\n]$'))";
   ]
 
 let run conn statements =
@@ -64,12 +58,11 @@ let run conn statements =
     statements
 
 let drop conn = run conn drop_statements
-
 let restore conn = run conn add_statements
 
 (* One canonicalizing restore for finalize blocks: whatever a probe left
    behind, the row is valid again before the constraints return. *)
 let q_recanonicalize =
   (Caqti_type.(t3 int string string) ->. Caqti_type.unit)
-  "UPDATE communities SET slug = $2, name = $3, description = NULL \
-   WHERE id = $1"
+    "UPDATE communities SET slug = $2, name = $3, description = NULL WHERE id \
+     = $1"

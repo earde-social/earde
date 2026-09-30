@@ -56,8 +56,15 @@ type partial = {
 }
 
 let empty_partial =
-  { p_draft = None; p_kind = None; p_name = None; p_slug = None;
-    p_description = None; p_website = None; p_primary = None }
+  {
+    p_draft = None;
+    p_kind = None;
+    p_name = None;
+    p_slug = None;
+    p_description = None;
+    p_website = None;
+    p_primary = None;
+  }
 
 (* Field names match byte-exactly: no case folding, no trimming. The
    installed Dream.form removes dream.csrf before application parsing, so a
@@ -69,12 +76,25 @@ let of_fields fields =
     match fields with
     | [] -> (
         match acc with
-        | { p_draft = Some draft_id; p_kind = Some kind; p_name = Some name;
-            p_slug = Some slug; p_description = Some description;
-            p_website = Some website_url;
-            p_primary = Some primary_snapshot_id } ->
-            Ok { draft_id; kind; name; slug; description; website_url;
-                 primary_snapshot_id }
+        | {
+         p_draft = Some draft_id;
+         p_kind = Some kind;
+         p_name = Some name;
+         p_slug = Some slug;
+         p_description = Some description;
+         p_website = Some website_url;
+         p_primary = Some primary_snapshot_id;
+        } ->
+            Ok
+              {
+                draft_id;
+                kind;
+                name;
+                slug;
+                description;
+                website_url;
+                primary_snapshot_id;
+              }
         | _ -> Error Invalid_form)
     | ("draft_id", raw) :: rest -> (
         match (acc.p_draft, parse_positive_int64 raw) with
@@ -105,9 +125,9 @@ let of_fields fields =
     | ("primary_snapshot_id", raw) :: rest -> (
         match acc.p_primary with
         | Some _ -> Error Invalid_form
-        | None ->
+        | None -> (
             if raw = "" then walk rest { acc with p_primary = Some None }
-            else (
+            else
               match parse_positive_int64 raw with
               | Some id -> walk rest { acc with p_primary = Some (Some id) }
               | None -> Error Invalid_form))
@@ -116,17 +136,11 @@ let of_fields fields =
   walk fields empty_partial
 
 let draft_id t = t.draft_id
-
 let kind t = t.kind
-
 let name t = t.name
-
 let slug t = t.slug
-
 let description t = t.description
-
 let website_url t = t.website_url
-
 let primary_snapshot_id t = t.primary_snapshot_id
 
 (* The selected snapshot ids are call context, never parser state: only the

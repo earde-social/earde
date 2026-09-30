@@ -19,7 +19,6 @@
    affordance is a link to the existing authorized flow, gated by the caller
    and granting nothing: that surface reauthorizes from scratch. *)
 
-
 let title_copy = "Network"
 let intro_copy = "Projects and communities connected to this community."
 let connect_copy = "Connect a community"
@@ -27,45 +26,47 @@ let connect_copy = "Connect a community"
 (* Each list gets its own anchor so the home's two compact rows can land on
    the block they name, without a second page or a second route. *)
 let block ~anchor ~fragment ~empty =
-  (Html.template "<div class='cnet-block' id='%s'>%s</div>"
-  [ anchor
-  ; (if Html.is_empty fragment then empty else fragment) ])
+  Html.template "<div class='cnet-block' id='%s'>%s</div>"
+    [ anchor; (if Html.is_empty fragment then empty else fragment) ]
 
 let community_network_page ?user ?(noindex = false) ?(rail_communities = [])
     ~(community : Community_types.community) ~sidebar ~projects_section
     ~communities_section ~can_connect request =
-  let slug = (Html.text (community.slug)) in
+  let slug = Html.text community.slug in
   (* The connect flow is the community's own existing route; the link is a
      shortcut for an authorized viewer, never an authorization. *)
   let cta =
     if can_connect then
-      (Html.template "<div class='cnet-cta'><a class='btn btn--secondary btn--sm' \
+      Html.template
+        "<div class='cnet-cta'><a class='btn btn--secondary btn--sm' \
          href='/c/%s/settings/connections/new'>%s</a></div>"
-  [ slug
-  ; (Html.text connect_copy) ])
+        [ slug; Html.text connect_copy ]
     else Html.empty
   in
   let head =
-    (Html.template "<div class='chead'><div class='chead__row'><div class='launch-chead-id'>\
-       <div class='titleline'><h1 class='chead__title'>%s</h1><span \
-       class='chead__slug'>/c/%s</span></div>\
-       <p class='chead__desc'>%s</p>%s</div></div></div>"
-  [ (Html.text title_copy)
-  ; slug
-  ; (Html.text intro_copy)
-  ; cta ])
+    Html.template
+      "<div class='chead'><div class='chead__row'><div \
+       class='launch-chead-id'><div class='titleline'><h1 \
+       class='chead__title'>%s</h1><span \
+       class='chead__slug'>/c/%s</span></div><p \
+       class='chead__desc'>%s</p>%s</div></div></div>"
+      [ Html.text title_copy; slug; Html.text intro_copy; cta ]
   in
   let content =
-    (Html.template "<div class='scroll'>%s<div class='container cnet-body'><div \
+    Html.template
+      "<div class='scroll'>%s<div class='container cnet-body'><div \
        class='stack'>%s%s</div></div></div>"
-  [ head
-  ; (block ~anchor:(Html.static "projects") ~fragment:projects_section
-         ~empty:Community_connected_projects_pages.empty_projects_section)
-  ; (block ~anchor:(Html.static "communities") ~fragment:communities_section
-         ~empty:Community_connected_communities_pages
-                .empty_communities_section) ])
+      [
+        head;
+        block ~anchor:(Html.static "projects") ~fragment:projects_section
+          ~empty:Community_connected_projects_pages.empty_projects_section;
+        block
+          ~anchor:(Html.static "communities")
+          ~fragment:communities_section
+          ~empty:Community_connected_communities_pages.empty_communities_section;
+      ]
   in
-  Community_shell.launch_community_page ?user ~noindex ~request ~rail_communities
-    ~community ~sidebar ~page_class:"launch-community-network"
+  Community_shell.launch_community_page ?user ~noindex ~request
+    ~rail_communities ~community ~sidebar ~page_class:"launch-community-network"
     ~title:(community.name ^ " — Network")
     ~content ()

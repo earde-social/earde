@@ -18,7 +18,9 @@
 let imagemagick_binary =
   lazy
     (let exists name =
-       Sys.command (Printf.sprintf "command -v %s >/dev/null 2>&1" (Filename.quote name)) = 0
+       Sys.command
+         (Printf.sprintf "command -v %s >/dev/null 2>&1" (Filename.quote name))
+       = 0
      in
      if exists "magick" then "magick" else "convert")
 
@@ -48,10 +50,12 @@ let run_image_convert argv =
           let status = Lwt.protected process#status in
           let%lwt outcome =
             Lwt.pick
-              [ (let%lwt s = status in
+              [
+                (let%lwt s = status in
                  Lwt.return (`Exited s));
                 (let%lwt () = Lwt_unix.sleep image_convert_timeout_seconds in
-                 Lwt.return `Timeout) ]
+                 Lwt.return `Timeout);
+              ]
           in
           match outcome with
           | `Exited (Unix.WEXITED 0) -> Lwt.return true
@@ -89,21 +93,27 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
                 ~now_ms:(Int64.of_float (Unix.gettimeofday () *. 1000.0))
                 ~random:Dream.random
             in
-            let tmp_path = Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".tmp") in
-            let webp_path = Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".webp") in
+            let tmp_path =
+              Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".tmp")
+            in
+            let webp_path =
+              Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".webp")
+            in
             let dest_name = base ^ ".webp" in
             let dest_path = "static/uploads/" ^ dest_name in
             let url_path = "/static/uploads/" ^ dest_name in
             let cleanup () =
               (try Sys.remove tmp_path with _ -> ());
-              (try Sys.remove webp_path with _ -> ())
+              try Sys.remove webp_path with _ -> ()
             in
             Lwt.catch
               (fun () ->
                 (* Exclusive create: never write through a file or link
                    that already exists in the shared temp directory. *)
                 let oc =
-                  open_out_gen [ Open_wronly; Open_creat; Open_excl; Open_binary ] 0o600 tmp_path
+                  open_out_gen
+                    [ Open_wronly; Open_creat; Open_excl; Open_binary ]
+                    0o600 tmp_path
                 in
                 output_string oc image_bytes;
                 close_out oc;
@@ -123,21 +133,21 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
                      copy when /tmp and static/uploads are on different
                      filesystems, which Sys.rename cannot cross. *)
                   match
-                    (try
-                       Sys.rename webp_path dest_path;
-                       `Ok
-                     with _ -> (
-                       try
-                         let ic = open_in_bin webp_path in
-                         let len = in_channel_length ic in
-                         let data = really_input_string ic len in
-                         close_in ic;
-                         let oc = open_out_bin dest_path in
-                         output_string oc data;
-                         close_out oc;
-                         (try Sys.remove webp_path with _ -> ());
-                         `Ok
-                       with _ -> `Failed))
+                    try
+                      Sys.rename webp_path dest_path;
+                      `Ok
+                    with _ -> (
+                      try
+                        let ic = open_in_bin webp_path in
+                        let len = in_channel_length ic in
+                        let data = really_input_string ic len in
+                        close_in ic;
+                        let oc = open_out_bin dest_path in
+                        output_string oc data;
+                        close_out oc;
+                        (try Sys.remove webp_path with _ -> ());
+                        `Ok
+                      with _ -> `Failed)
                   with
                   | `Ok -> Lwt.return (Ok (Some url_path))
                   | `Failed ->

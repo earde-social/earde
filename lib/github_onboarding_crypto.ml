@@ -9,12 +9,9 @@ type state = string
 type state_hash = string
 type session_binding = string
 type session_binding_hash = string
-
-type parse_error =
-  | Invalid_format
+type parse_error = Invalid_format
 
 let token_bytes = 32
-
 let generate () = Dream.to_base64url (Dream.random token_bytes)
 
 (* The error is deliberately payload-free: rejected callback input is

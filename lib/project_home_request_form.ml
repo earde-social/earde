@@ -16,11 +16,7 @@
    probing client cannot learn which field failed, whether a field was
    duplicated, or whether an id overflowed. *)
 
-type t = {
-  target_community_id : int;
-  request_note : string;
-}
-
+type t = { target_community_id : int; request_note : string }
 type error = Invalid_form
 
 let is_ascii_digit c = c >= '0' && c <= '9'
@@ -32,8 +28,7 @@ let is_ascii_digit c = c >= '0' && c <= '9'
    (overflow → None). Never parsed through int64 and truncated. Leading
    zeroes are fine: the parsed value, not the spelling, must be positive. *)
 let parse_positive_int raw =
-  if String.length raw = 0 || not (String.for_all is_ascii_digit raw) then
-    None
+  if String.length raw = 0 || not (String.for_all is_ascii_digit raw) then None
   else
     match int_of_string_opt raw with
     | Some value when value > 0 -> Some value
@@ -64,7 +59,6 @@ let of_fields fields =
   walk fields None None
 
 let target_community_id t = t.target_community_id
-
 let request_note t = t.request_note
 
 (* The submitted note travels as Some even when blank: the domain

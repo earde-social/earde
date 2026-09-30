@@ -108,7 +108,6 @@ let draft_store_reason =
   | Storage_error -> "storage_error"
 
 let stage_reason stage reason = Printf.sprintf "stage=%s reason=%s" stage reason
-
 let pending_fields id = Printf.sprintf " installation=%Ld" id
 
 let verified_fields { installation_id; account_type } =
@@ -120,8 +119,7 @@ let describe = function
   | Configuration_unavailable -> stage_reason "configuration" "unavailable"
   | Cookie_missing -> stage_reason "flow_cookie" "missing"
   | Cookie_invalid -> stage_reason "flow_cookie" "invalid"
-  | Authorization_rejected ->
-      stage_reason "authorization" "rejected_at_github"
+  | Authorization_rejected -> stage_reason "authorization" "rejected_at_github"
   | Credentials_unavailable -> stage_reason "credentials" "unavailable"
   | State_rejected error -> stage_reason "state" (consume_reason error)
   | Token_exchange_failed { pending_installation_id; error } ->
@@ -140,8 +138,7 @@ let describe = function
       ^ status
       ^ verified_fields installation
   | Installation_persistence_failed { installation; error } ->
-      stage_reason "installation_persistence"
-        (installation_store_reason error)
+      stage_reason "installation_persistence" (installation_store_reason error)
       ^ verified_fields installation
   | Draft_persistence_failed { installation; error } ->
       stage_reason "draft_persistence" (draft_store_reason error)

@@ -8,11 +8,7 @@ type purpose =
   | Community_banner
   | Post_image
 
-type format =
-  | Jpeg
-  | Png
-  | Gif
-  | Webp
+type format = Jpeg | Png | Gif | Webp
 
 let max_bytes = 5 * 1024 * 1024
 
@@ -24,8 +20,7 @@ let too_large_message =
    format" and "the decoder failed" are indistinguishable to the uploader, so
    a payload can never be used to probe what the pipeline recognises. *)
 let rejected_message =
-  "Image processing failed. Please upload a valid image (JPEG, PNG, GIF, \
-   WebP)."
+  "Image processing failed. Please upload a valid image (JPEG, PNG, GIF, WebP)."
 
 let rate_limited_message =
   "Too many image uploads. Please wait a moment and try again."
@@ -42,7 +37,8 @@ let starts_with ~prefix s =
 let detect_format bytes =
   if starts_with ~prefix:"\xff\xd8\xff" bytes then Some Jpeg
   else if starts_with ~prefix:"\x89PNG\r\n\x1a\n" bytes then Some Png
-  else if starts_with ~prefix:"GIF87a" bytes || starts_with ~prefix:"GIF89a" bytes
+  else if
+    starts_with ~prefix:"GIF87a" bytes || starts_with ~prefix:"GIF89a" bytes
   then Some Gif
   else if
     (* RIFF<4-byte little-endian length>WEBP *)
@@ -76,14 +72,32 @@ let resize_geometry = function
    but they are not a substitute for the deployment's policy.xml, which is the
    only place the delegate coders themselves can be turned off. *)
 let resource_limits =
-  [ "-limit"; "memory"; "256MiB";
-    "-limit"; "map"; "512MiB";
-    "-limit"; "disk"; "1GiB";
-    "-limit"; "area"; "64MP";
-    "-limit"; "width"; "16KP";
-    "-limit"; "height"; "16KP";
-    "-limit"; "time"; "20";
-    "-limit"; "thread"; "2" ]
+  [
+    "-limit";
+    "memory";
+    "256MiB";
+    "-limit";
+    "map";
+    "512MiB";
+    "-limit";
+    "disk";
+    "1GiB";
+    "-limit";
+    "area";
+    "64MP";
+    "-limit";
+    "width";
+    "16KP";
+    "-limit";
+    "height";
+    "16KP";
+    "-limit";
+    "time";
+    "20";
+    "-limit";
+    "thread";
+    "2";
+  ]
 
 (* An argument VECTOR, not a command string: Lwt_process passes it to execvp
    directly, so no shell exists to interpret a quote, a semicolon, or a
@@ -94,12 +108,14 @@ let resource_limits =
    previous mogrify invocation did. *)
 let convert_argv ~binary ~format ~purpose ~input ~output =
   Array.of_list
-    (((binary :: resource_limits)
-     @ [ coder format ^ input ^ "[0]";
-         "-auto-orient";
-         "-strip";
-         "-resize";
-         resize_geometry purpose;
-         "-quality";
-         "80";
-         "webp:" ^ output ]))
+    ((binary :: resource_limits)
+    @ [
+        coder format ^ input ^ "[0]";
+        "-auto-orient";
+        "-strip";
+        "-resize";
+        resize_geometry purpose;
+        "-quality";
+        "80";
+        "webp:" ^ output;
+      ])

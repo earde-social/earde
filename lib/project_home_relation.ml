@@ -10,11 +10,7 @@
    rejected note, length, malformed byte, status, or action can travel
    through the error channel. *)
 
-type status =
-  | Pending
-  | Accepted
-  | Rejected
-  | Removed
+type status = Pending | Accepted | Rejected | Removed
 
 (* Closed conversion: exactly the four database spellings, nothing else.
    Aliases and capitalization variants belong to no layer — stores read and
@@ -32,19 +28,9 @@ let string_of_status = function
   | Rejected -> "rejected"
   | Removed -> "removed"
 
-type action =
-  | Accept
-  | Reject
-  | Remove
-
-type t = {
-  status : status;
-  request_note : string option;
-}
-
-type error =
-  | Invalid_request_note
-  | Invalid_transition
+type action = Accept | Reject | Remove
+type t = { status : status; request_note : string option }
+type error = Invalid_request_note | Invalid_transition
 
 (* Mirrors the description cap in Project_identity: private workflow text has
    no reason to outgrow the longest user-visible free-text field. *)
@@ -79,11 +65,11 @@ let normalize_line_endings s =
   let b = Buffer.create n in
   let i = ref 0 in
   while !i < n do
-    (if s.[!i] = '\r' then begin
-       Buffer.add_char b '\n';
-       if !i + 1 < n && s.[!i + 1] = '\n' then incr i
-     end
-     else Buffer.add_char b s.[!i]);
+    if s.[!i] = '\r' then begin
+      Buffer.add_char b '\n';
+      if !i + 1 < n && s.[!i + 1] = '\n' then incr i
+    end
+    else Buffer.add_char b s.[!i];
     incr i
   done;
   Buffer.contents b
@@ -137,9 +123,7 @@ let create_pending ~request_note =
    review or pending request ever took place, and modeling it as
    Pending-then-Accept would fabricate a review that never happened. *)
 let create_provisioned_home () = { status = Accepted; request_note = None }
-
 let status t = t.status
-
 let request_note t = t.request_note
 
 (* The MVP lifecycle is a straight line: a pending request is reviewed once

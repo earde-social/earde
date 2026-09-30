@@ -28,12 +28,24 @@ let html_unescape s =
     !i + String.length p <= n && String.sub s !i (String.length p) = p
   in
   while !i < n do
-    if starts "&amp;" then (Buffer.add_char b '&'; i := !i + 5)
-    else if starts "&lt;" then (Buffer.add_char b '<'; i := !i + 4)
-    else if starts "&gt;" then (Buffer.add_char b '>'; i := !i + 4)
-    else if starts "&quot;" then (Buffer.add_char b '"'; i := !i + 6)
-    else if starts "&#39;" then (Buffer.add_char b '\''; i := !i + 5)
-    else (Buffer.add_char b s.[!i]; incr i)
+    if starts "&amp;" then (
+      Buffer.add_char b '&';
+      i := !i + 5)
+    else if starts "&lt;" then (
+      Buffer.add_char b '<';
+      i := !i + 4)
+    else if starts "&gt;" then (
+      Buffer.add_char b '>';
+      i := !i + 4)
+    else if starts "&quot;" then (
+      Buffer.add_char b '"';
+      i := !i + 6)
+    else if starts "&#39;" then (
+      Buffer.add_char b '\'';
+      i := !i + 5)
+    else (
+      Buffer.add_char b s.[!i];
+      incr i)
   done;
   Buffer.contents b
 
@@ -50,8 +62,8 @@ let search_hrefs body =
       | None -> ()
       | Some stop ->
           let href = String.sub body start (stop - start) in
-          if String.length href >= 8 && String.sub href 0 8 = "/search?"
-          then acc := href :: !acc;
+          if String.length href >= 8 && String.sub href 0 8 = "/search?" then
+            acc := href :: !acc;
           scan (stop + 1))
     else scan (from + 1)
   in
@@ -62,32 +74,26 @@ let render_search ~q ~tab ~page =
   let pipeline =
     Dream.memory_sessions @@ fun req ->
     Dream.html
-      (Earde.Public_pages.search_results_page ~admin_usernames:[] [] page tab q [] [] []
-         [] req)
+      (Earde.Public_pages.search_results_page ~admin_usernames:[] [] page tab q
+         [] [] [] [] req)
   in
-  let* response =
-    pipeline (Dream.request ~method_:`GET ~target:"/search" "")
-  in
+  let* response = pipeline (Dream.request ~method_:`GET ~target:"/search" "") in
   Dream.body response
 
 let parse_href href = Uri.of_string (html_unescape href)
 
 let pager_links hrefs =
-  List.filter
-    (fun h -> Uri.get_query_param (parse_href h) "page" <> None)
-    hrefs
+  List.filter (fun h -> Uri.get_query_param (parse_href h) "page" <> None) hrefs
 
 (* Covers &, =, #, both quote kinds, spaces, '+', backslash and non-ASCII
    (Latin + CJK). Semantic assertion: the URL, parsed and decoded the way a
    navigation would, must yield the original value back. *)
 let hostile_q = "a&b=c#d 'e' \"f\" +g\\h \xc3\xa0\xe6\xbc\xa2"
-
 let closed_tabs = [ "posts"; "communities"; "comments"; "people" ]
 
 let url_q_case =
-  Alcotest.test_case
-    "hostile query round-trips through every /search link" `Quick
-    (fun () ->
+  Alcotest.test_case "hostile query round-trips through every /search link"
+    `Quick (fun () ->
       Lwt_main.run
         (let* body = render_search ~q:hostile_q ~tab:"posts" ~page:2 in
          let hrefs = search_hrefs body in
@@ -97,46 +103,44 @@ let url_q_case =
            (fun href ->
              let u = parse_href href in
              (match Uri.get_query_param u "q" with
-              | Some v ->
-                  Alcotest.(check string) "q round-trips" hostile_q v
-              | None -> Alcotest.failf "no q parameter in %s" href);
+             | Some v -> Alcotest.(check string) "q round-trips" hostile_q v
+             | None -> Alcotest.failf "no q parameter in %s" href);
              (match Uri.get_query_param u "t" with
-              | Some t ->
-                  Alcotest.(check bool) "t stays closed" true
-                    (List.mem t closed_tabs)
-              | None -> Alcotest.failf "no t parameter in %s" href);
-             Alcotest.(check bool) "no fragment" true
-               (Uri.fragment u = None))
+             | Some t ->
+                 Alcotest.(check bool)
+                   "t stays closed" true (List.mem t closed_tabs)
+             | None -> Alcotest.failf "no t parameter in %s" href);
+             Alcotest.(check bool) "no fragment" true (Uri.fragment u = None))
            hrefs;
          (match pager_links hrefs with
-          | [ h ] ->
-              Alcotest.(check (option string)) "prev page intact"
-                (Some "1")
-                (Uri.get_query_param (parse_href h) "page")
-          | l ->
-              Alcotest.failf "expected exactly one pager link, got %d"
-                (List.length l));
+         | [ h ] ->
+             Alcotest.(check (option string))
+               "prev page intact" (Some "1")
+               (Uri.get_query_param (parse_href h) "page")
+         | l ->
+             Alcotest.failf "expected exactly one pager link, got %d"
+               (List.length l));
          Lwt.return_unit))
 
 let hostile_t = "posts&admin=1#x 'y' \"z\""
 
 let url_t_case =
   Alcotest.test_case
-    "hostile tab value cannot smuggle parameters or truncate the URL"
-    `Quick
+    "hostile tab value cannot smuggle parameters or truncate the URL" `Quick
     (fun () ->
       Lwt_main.run
         (let* body = render_search ~q:"hello world" ~tab:hostile_t ~page:2 in
          match pager_links (search_hrefs body) with
          | [ h ] ->
              let u = parse_href h in
-             Alcotest.(check (option string)) "t round-trips"
-               (Some hostile_t)
+             Alcotest.(check (option string))
+               "t round-trips" (Some hostile_t)
                (Uri.get_query_param u "t");
-             Alcotest.(check (option string)) "q round-trips"
-               (Some "hello world")
+             Alcotest.(check (option string))
+               "q round-trips" (Some "hello world")
                (Uri.get_query_param u "q");
-             Alcotest.(check (option string)) "no smuggled parameter" None
+             Alcotest.(check (option string))
+               "no smuggled parameter" None
                (Uri.get_query_param u "admin");
              Alcotest.(check bool) "no fragment" true (Uri.fragment u = None);
              Lwt.return_unit
@@ -159,20 +163,28 @@ let test_usernames = "('osshard_admin', 'osshard_target')"
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP SCHEMA IF EXISTS osshard_half CASCADE"
-    ; "DROP SCHEMA IF EXISTS osshard_nosessions CASCADE"
-    ; "DROP SCHEMA IF EXISTS osshard_frozen CASCADE"
-    ; "DELETE FROM dream_session WHERE id LIKE 'osshard-%'"
-    ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN "
-      ^ test_usernames ^ ")"
-    ; "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
-    ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
-    ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'osshard-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'osshard-%'"
-    ; "DELETE FROM users WHERE username IN " ^ test_usernames
+    [
+      "DROP SCHEMA IF EXISTS osshard_half CASCADE";
+      "DROP SCHEMA IF EXISTS osshard_nosessions CASCADE";
+      "DROP SCHEMA IF EXISTS osshard_frozen CASCADE";
+      "DELETE FROM dream_session WHERE id LIKE 'osshard-%'";
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username IN " ^ test_usernames ^ ")";
+      "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'osshard-%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'osshard-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'osshard-%')";
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'osshard-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'osshard-%')";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT \
+       'community:' || c.id::text FROM communities c WHERE c.slug LIKE \
+       'osshard-%')";
+      "DELETE FROM communities WHERE slug LIKE 'osshard-%'";
+      "DELETE FROM users WHERE username IN " ^ test_usernames;
     ]
 
 let or_fail label = function
@@ -203,12 +215,12 @@ let db_case name f =
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 let q_insert_community =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name) VALUES ($1, $1) RETURNING id"
+    "INSERT INTO communities (slug, name) VALUES ($1, $1) RETURNING id"
 
 let form_body fields =
   String.concat "&"
@@ -234,7 +246,8 @@ let multipart_body fields =
    validation passes and the handler's own logic is what gets exercised. *)
 let run_post ~url ?(multipart = false) ~session ~target ~form handler =
   let pipeline =
-    Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+    Dream.sql_pool url @@ Dream.memory_sessions
+    @@ fun req ->
     let* () =
       Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) session
     in
@@ -245,15 +258,18 @@ let run_post ~url ?(multipart = false) ~session ~target ~form handler =
     handler req
   in
   let headers =
-    [ ( "Content-Type",
+    [
+      ( "Content-Type",
         if multipart then "multipart/form-data; boundary=" ^ boundary
-        else "application/x-www-form-urlencoded" ) ]
+        else "application/x-www-form-urlencoded" );
+    ]
   in
   pipeline (Dream.request ~method_:`POST ~target ~headers "")
 
 let run_get ~url ~session ~target handler =
   let pipeline =
-    Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+    Dream.sql_pool url @@ Dream.memory_sessions
+    @@ fun req ->
     let* () =
       Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) session
     in
@@ -265,7 +281,7 @@ let run_get ~url ~session ~target handler =
    users.is_admin row; the session claim only enables the lookup. *)
 let q_make_admin =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE users SET is_admin = TRUE WHERE id = $1"
+    "UPDATE users SET is_admin = TRUE WHERE id = $1"
 
 let insert_admin (module C : Caqti_lwt.CONNECTION) username =
   let* uid = C.find q_insert_user username in
@@ -275,16 +291,27 @@ let insert_admin (module C : Caqti_lwt.CONNECTION) username =
   Lwt.return uid
 
 let admin_session uid =
-  [ ("user_id", string_of_int uid); ("username", "osshard_admin");
-    ("is_admin", "true") ]
+  [
+    ("user_id", string_of_int uid);
+    ("username", "osshard_admin");
+    ("is_admin", "true");
+  ]
 
 let status_int r = Dream.status_to_int (Dream.status r)
 
 (* CR, LF, a full header-injection payload, quotes, slashes, backslash,
    protocol-relative and absolute external URLs. *)
 let hostile_slugs =
-  [ "evil\rX: 1"; "evil\nX: 1"; "evil\r\nX-Evil: injected"; "\"quoted\"";
-    "sla/sh"; "back\\slash"; "//example.com"; "https://example.com" ]
+  [
+    "evil\rX: 1";
+    "evil\nX: 1";
+    "evil\r\nX-Evil: injected";
+    "\"quoted\"";
+    "sla/sh";
+    "back\\slash";
+    "//example.com";
+    "https://example.com";
+  ]
 
 (* No hostile fragment may appear in ANY response header, and no header
    value may contain a raw CR/LF (which would mint an additional header). *)
@@ -292,11 +319,11 @@ let assert_clean_headers label response =
   List.iter
     (fun (name, value) ->
       if
-        contains value "example.com" || contains value "X-Evil"
+        contains value "example.com"
+        || contains value "X-Evil"
         || String.exists (fun c -> c = '\r' || c = '\n') value
       then
-        Alcotest.failf "%s: hostile content in header %s: %S" label name
-          value)
+        Alcotest.failf "%s: hostile content in header %s: %S" label name value)
     (Dream.all_headers response)
 
 let unban_location_case =
@@ -311,13 +338,16 @@ let unban_location_case =
             run_post ~url ~session:(admin_session uid)
               ~target:"/unban-community-user"
               ~form:
-                [ ("community_id", string_of_int cid)
-                ; ("community_slug", slug)
-                ; ("target_user_id", string_of_int uid) ]
+                [
+                  ("community_id", string_of_int cid);
+                  ("community_slug", slug);
+                  ("target_user_id", string_of_int uid);
+                ]
               Earde.Moderation_handlers.unban_community_user_handler
           in
           Alcotest.(check int) "303" 303 (status_int response);
-          Alcotest.(check (option string)) "authoritative Location"
+          Alcotest.(check (option string))
+            "authoritative Location"
             (Some "/c/osshard-real/settings?panel=bans")
             (Dream.header response "Location");
           assert_clean_headers "unban" response;
@@ -325,8 +355,7 @@ let unban_location_case =
         hostile_slugs)
 
 let update_community_location_case =
-  db_case
-    "update-community: redirect and return URLs use the database slug"
+  db_case "update-community: redirect and return URLs use the database slug"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "osshard_admin" in
       let* cid = C.find q_insert_community "osshard-real" in
@@ -337,45 +366,49 @@ let update_community_location_case =
             run_post ~url ~multipart:true ~session:(admin_session uid)
               ~target:"/update-community"
               ~form:
-                [ ("community_id", string_of_int cid)
-                ; ("community_slug", slug)
-                ; ("description", "osshard description")
-                ; ("rules", "")
-                ; ("avatar_url", "")
-                ; ("banner_url", "")
-                ; ("existing_avatar_url", "")
-                ; ("existing_banner_url", "") ]
+                [
+                  ("community_id", string_of_int cid);
+                  ("community_slug", slug);
+                  ("description", "osshard description");
+                  ("rules", "");
+                  ("avatar_url", "");
+                  ("banner_url", "");
+                  ("existing_avatar_url", "");
+                  ("existing_banner_url", "");
+                ]
               Earde.Community_settings_handlers.update_community_handler
           in
           Alcotest.(check int) "303" 303 (status_int response);
-          Alcotest.(check (option string)) "authoritative Location"
-            (Some "/c/osshard-real/settings")
+          Alcotest.(check (option string))
+            "authoritative Location" (Some "/c/osshard-real/settings")
             (Dream.header response "Location");
           assert_clean_headers "update-community" response;
           Lwt.return_unit)
         hostile_slugs)
 
 let update_missing_community_case =
-  db_case
-    "update-community: a nonexistent id falls back to / without echoing"
+  db_case "update-community: a nonexistent id falls back to / without echoing"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "osshard_admin" in
       let* response =
         run_post ~url ~multipart:true ~session:(admin_session uid)
           ~target:"/update-community"
           ~form:
-            [ ("community_id", "999999999")
-            ; ("community_slug", "//example.com")
-            ; ("description", "osshard description")
-            ; ("rules", "")
-            ; ("avatar_url", "")
-            ; ("banner_url", "")
-            ; ("existing_avatar_url", "")
-            ; ("existing_banner_url", "") ]
+            [
+              ("community_id", "999999999");
+              ("community_slug", "//example.com");
+              ("description", "osshard description");
+              ("rules", "");
+              ("avatar_url", "");
+              ("banner_url", "");
+              ("existing_avatar_url", "");
+              ("existing_banner_url", "");
+            ]
           Earde.Community_settings_handlers.update_community_handler
       in
       Alcotest.(check int) "303" 303 (status_int response);
-      Alcotest.(check (option string)) "root Location" (Some "/")
+      Alcotest.(check (option string))
+        "root Location" (Some "/")
         (Dream.header response "Location");
       assert_clean_headers "update-community missing" response;
       Lwt.return_unit)
@@ -389,16 +422,21 @@ let export_disposition_case =
           Earde.Account_handlers.export_data_handler
       in
       Alcotest.(check int) "200" 200 (status_int response);
-      Alcotest.(check (option string)) "conservative ASCII filename"
+      Alcotest.(check (option string))
+        "conservative ASCII filename"
         (Some
-           (Printf.sprintf
-              "attachment; filename=\"earde_export_user_%d.json\"" uid))
+           (Printf.sprintf "attachment; filename=\"earde_export_user_%d.json\""
+              uid))
         (Dream.header response "Content-Disposition");
       Lwt.return_unit)
 
 let header_suite =
-  [ unban_location_case; update_community_location_case;
-    update_missing_community_case; export_disposition_case ]
+  [
+    unban_location_case;
+    update_community_location_case;
+    update_missing_community_case;
+    export_disposition_case;
+  ]
 
 (* --- forced database failures must stay payload-free --- *)
 
@@ -418,15 +456,16 @@ let poison url = with_search_path url "osshard_void"
 let q_half_schema =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP SCHEMA IF EXISTS osshard_half CASCADE"
-    ; "CREATE SCHEMA osshard_half"
-    ; "CREATE VIEW osshard_half.communities AS SELECT * FROM public.communities"
+    [
+      "DROP SCHEMA IF EXISTS osshard_half CASCADE";
+      "CREATE SCHEMA osshard_half";
+      "CREATE VIEW osshard_half.communities AS SELECT * FROM public.communities"
       (* users rides along so the handlers' CURRENT-admin lookup succeeds and
          the failure stays where each case wants it — the promote role/write
          and the community-ban write. Without it every admin-gated handler
          would fail at the authority lookup instead, and these cases would
-         stop covering the arms they name. *)
-    ; "CREATE VIEW osshard_half.users AS SELECT * FROM public.users"
+         stop covering the arms they name. *);
+      "CREATE VIEW osshard_half.users AS SELECT * FROM public.users";
     ]
 
 let make_half_schema (module C : Caqti_lwt.CONNECTION) =
@@ -440,12 +479,20 @@ let make_half_schema (module C : Caqti_lwt.CONNECTION) =
 let generic = "A database error occurred. Please try again later."
 
 let db_needles =
-  [ "osshard_void"; "osshard_half"; "search_path"; "postgresql"; "caqti";
-    "relation"; "constraint"; "select"; "insert" ]
+  [
+    "osshard_void";
+    "osshard_half";
+    "search_path";
+    "postgresql";
+    "caqti";
+    "relation";
+    "constraint";
+    "select";
+    "insert";
+  ]
 
 let must body s =
-  if not (contains body s) then
-    Alcotest.failf "expected body to contain %S" s
+  if not (contains body s) then Alcotest.failf "expected body to contain %S" s
 
 (* Case-insensitive: driver error text varies in casing ("SELECT" in SQL,
    "relation" in PostgreSQL messages, "Caqti"/"caqti" in module paths). *)
@@ -474,11 +521,17 @@ let add_section_disclosure_case =
         run_post ~url:(poison url) ~session:(admin_session uid)
           ~target:"/c/osshard-real/add-section"
           ~form:
-            [ ("name", "General"); ("description", "");
-              ("default_sort", "hot"); ("position", "1") ]
+            [
+              ("name", "General");
+              ("description", "");
+              ("default_sort", "hot");
+              ("position", "1");
+            ]
           (Dream.router
-             [ Dream.post "/c/:slug/add-section"
-                 Earde.Community_structure_handlers.add_section_handler ])
+             [
+               Dream.post "/c/:slug/add-section"
+                 Earde.Community_structure_handlers.add_section_handler;
+             ])
       in
       Alcotest.(check int) "500" 500 (status_int response);
       let* body = Dream.body response in
@@ -492,17 +545,19 @@ let update_community_disclosure_case =
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "osshard_admin" in
       let* response =
-        run_post ~url:(poison url) ~multipart:true
-          ~session:(admin_session uid) ~target:"/update-community"
+        run_post ~url:(poison url) ~multipart:true ~session:(admin_session uid)
+          ~target:"/update-community"
           ~form:
-            [ ("community_id", "1")
-            ; ("community_slug", "osshard-x")
-            ; ("description", "osshard description")
-            ; ("rules", "")
-            ; ("avatar_url", "")
-            ; ("banner_url", "")
-            ; ("existing_avatar_url", "")
-            ; ("existing_banner_url", "") ]
+            [
+              ("community_id", "1");
+              ("community_slug", "osshard-x");
+              ("description", "osshard description");
+              ("rules", "");
+              ("avatar_url", "");
+              ("banner_url", "");
+              ("existing_avatar_url", "");
+              ("existing_banner_url", "");
+            ]
           Earde.Community_settings_handlers.update_community_handler
       in
       Alcotest.(check int) "500" 500 (status_int response);
@@ -518,8 +573,10 @@ let global_ban_disclosure_case =
         run_post ~url:(poison url) ~session:(admin_session 42)
           ~target:"/admin/ban/user/1" ~form:[]
           (Dream.router
-             [ Dream.post "/admin/ban/user/:id"
-                 Earde.Admin_handlers.ban_user_handler ])
+             [
+               Dream.post "/admin/ban/user/:id"
+                 Earde.Admin_handlers.ban_user_handler;
+             ])
       in
       (* The current-admin lookup is the first query this route makes, so a
          pool where nothing resolves fails there — one query earlier than the
@@ -534,15 +591,16 @@ let global_ban_disclosure_case =
       Lwt.return_unit)
 
 let global_unban_disclosure_case =
-  db_case
-    "global unban: a database failure renders only the generic message"
+  db_case "global unban: a database failure renders only the generic message"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* response =
         run_post ~url:(poison url) ~session:(admin_session 42)
           ~target:"/admin/unban/user/1" ~form:[]
           (Dream.router
-             [ Dream.post "/admin/unban/user/:id"
-                 Earde.Admin_handlers.unban_user_global_handler ])
+             [
+               Dream.post "/admin/unban/user/:id"
+                 Earde.Admin_handlers.unban_user_global_handler;
+             ])
       in
       (* Authorization-lookup failure, as above; the unban write's own
          failure is covered by global_unban_mutation_failure_case. *)
@@ -579,51 +637,51 @@ let make_schema (module C : Caqti_lwt.CONNECTION) statements =
    both succeed. What is missing is dream_session, so the session revocation
    inside the ban transaction fails and the ban must roll back. *)
 let q_no_sessions_schema =
-  [ "DROP SCHEMA IF EXISTS osshard_nosessions CASCADE"
-  ; "CREATE SCHEMA osshard_nosessions"
-  ; "CREATE VIEW osshard_nosessions.users AS SELECT * FROM public.users"
+  [
+    "DROP SCHEMA IF EXISTS osshard_nosessions CASCADE";
+    "CREATE SCHEMA osshard_nosessions";
+    "CREATE VIEW osshard_nosessions.users AS SELECT * FROM public.users";
   ]
 
 (* SELECT DISTINCT is the narrowest way to make a view non-auto-updatable:
    reading is_admin still works, every UPDATE against it is refused. *)
 let q_frozen_users_schema =
-  [ "DROP SCHEMA IF EXISTS osshard_frozen CASCADE"
-  ; "CREATE SCHEMA osshard_frozen"
-  ; "CREATE VIEW osshard_frozen.users AS SELECT DISTINCT * FROM public.users"
+  [
+    "DROP SCHEMA IF EXISTS osshard_frozen CASCADE";
+    "CREATE SCHEMA osshard_frozen";
+    "CREATE VIEW osshard_frozen.users AS SELECT DISTINCT * FROM public.users";
   ]
 
 let q_set_banned =
   (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
-  "UPDATE users SET is_banned = $2 WHERE id = $1"
+    "UPDATE users SET is_banned = $2 WHERE id = $1"
 
 let q_is_banned =
   (Caqti_type.int ->! Caqti_type.bool)
-  "SELECT is_banned FROM users WHERE id = $1"
+    "SELECT is_banned FROM users WHERE id = $1"
 
 (* A durable session row for the target, written directly. Admin_store.ban_user
    deletes exactly the rows whose payload names this user_id, so the row
    surviving is what proves the rolled-back ban revoked nothing either. *)
 let q_insert_session =
   (Caqti_type.(t2 string string) ->. Caqti_type.unit)
-  "INSERT INTO dream_session (id, label, expires_at, payload)
-   VALUES ($1, $1, 9999999999, '{\"user_id\":\"' || $2 || '\"}')"
+    "INSERT INTO dream_session (id, label, expires_at, payload)\n\
+    \   VALUES ($1, $1, 9999999999, '{\"user_id\":\"' || $2 || '\"}')"
 
 let q_count_sessions =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM dream_session
-    WHERE payload::jsonb ->> 'user_id' = $1"
+    "SELECT COUNT(*)::int FROM dream_session\n\
+    \    WHERE payload::jsonb ->> 'user_id' = $1"
 
 let global_ban_mutation_failure_case =
   db_case
     "global ban: a failed session revocation rolls the ban back and answers \
-     generically"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     generically" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "osshard_admin" in
       let* target = C.find q_insert_user "osshard_target" in
       let* target = or_fail "target" target in
       let* r =
-        C.exec q_insert_session
-          ("osshard-target-session", string_of_int target)
+        C.exec q_insert_session ("osshard-target-session", string_of_int target)
       in
       let* () = or_fail "target session" r in
       let* () = make_schema (module C) q_no_sessions_schema in
@@ -634,8 +692,10 @@ let global_ban_mutation_failure_case =
           ~target:(Printf.sprintf "/admin/ban/user/%d" target)
           ~form:[]
           (Dream.router
-             [ Dream.post "/admin/ban/user/:id"
-                 Earde.Admin_handlers.ban_user_handler ])
+             [
+               Dream.post "/admin/ban/user/:id"
+                 Earde.Admin_handlers.ban_user_handler;
+             ])
       in
       (* Neither the refusal of a failed authority check nor a redirect: the
          durable admin lookup succeeded, the ban was attempted, and its own
@@ -648,8 +708,7 @@ let global_ban_mutation_failure_case =
       List.iter (must_not body) db_needles;
       let* banned = C.find q_is_banned target in
       let* banned = or_fail "target banned" banned in
-      Alcotest.(check bool) "no durable ban survives the rollback" false
-        banned;
+      Alcotest.(check bool) "no durable ban survives the rollback" false banned;
       let* n = C.find q_count_sessions (string_of_int target) in
       let* n = or_fail "target sessions" n in
       Alcotest.(check int) "the target's session survives" 1 n;
@@ -658,8 +717,7 @@ let global_ban_mutation_failure_case =
 let global_unban_mutation_failure_case =
   db_case
     "global unban: a failed unban write leaves the target banned and answers \
-     generically"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     generically" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "osshard_admin" in
       let* target = C.find q_insert_user "osshard_target" in
       let* target = or_fail "target" target in
@@ -673,11 +731,14 @@ let global_unban_mutation_failure_case =
           ~target:(Printf.sprintf "/admin/unban/user/%d" target)
           ~form:[]
           (Dream.router
-             [ Dream.post "/admin/unban/user/:id"
-                 Earde.Admin_handlers.unban_user_global_handler ])
+             [
+               Dream.post "/admin/unban/user/:id"
+                 Earde.Admin_handlers.unban_user_global_handler;
+             ])
       in
       Alcotest.(check int) "200" 200 (status_int response);
-      Alcotest.(check (option string)) "no Location" None
+      Alcotest.(check (option string))
+        "no Location" None
         (Dream.header response "Location");
       let* body = Dream.body response in
       must body generic;
@@ -696,12 +757,16 @@ let unban_lookup_failure_case =
         run_post ~url:(poison url) ~session:(admin_session 42)
           ~target:"/unban-community-user"
           ~form:
-            [ ("community_id", "1"); ("community_slug", "//example.com");
-              ("target_user_id", "1") ]
+            [
+              ("community_id", "1");
+              ("community_slug", "//example.com");
+              ("target_user_id", "1");
+            ]
           Earde.Moderation_handlers.unban_community_user_handler
       in
       Alcotest.(check int) "500" 500 (status_int response);
-      Alcotest.(check (option string)) "no Location" None
+      Alcotest.(check (option string))
+        "no Location" None
         (Dream.header response "Location");
       assert_clean_headers "unban lookup failure" response;
       let* body = Dream.body response in
@@ -710,8 +775,7 @@ let unban_lookup_failure_case =
       Lwt.return_unit)
 
 let unban_mutation_failure_case =
-  db_case
-    "community unban: a failed unban write errors, never fakes success"
+  db_case "community unban: a failed unban write errors, never fakes success"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "osshard_admin" in
       let* cid = C.find q_insert_community "osshard-real" in
@@ -724,13 +788,16 @@ let unban_mutation_failure_case =
           ~url:(with_search_path url "osshard_half")
           ~session:(admin_session uid) ~target:"/unban-community-user"
           ~form:
-            [ ("community_id", string_of_int cid)
-            ; ("community_slug", "//example.com")
-            ; ("target_user_id", string_of_int uid) ]
+            [
+              ("community_id", string_of_int cid);
+              ("community_slug", "//example.com");
+              ("target_user_id", string_of_int uid);
+            ]
           Earde.Moderation_handlers.unban_community_user_handler
       in
       Alcotest.(check int) "500" 500 (status_int response);
-      Alcotest.(check (option string)) "no Location" None
+      Alcotest.(check (option string))
+        "no Location" None
         (Dream.header response "Location");
       assert_clean_headers "unban mutation failure" response;
       let* body = Dream.body response in
@@ -739,17 +806,24 @@ let unban_mutation_failure_case =
       Lwt.return_unit)
 
 let disclosure_suite =
-  [ verify_email_disclosure_case; add_section_disclosure_case;
-    update_community_disclosure_case; global_ban_disclosure_case;
-    global_unban_disclosure_case; global_ban_mutation_failure_case;
-    global_unban_mutation_failure_case; unban_lookup_failure_case;
-    unban_mutation_failure_case ]
+  [
+    verify_email_disclosure_case;
+    add_section_disclosure_case;
+    update_community_disclosure_case;
+    global_ban_disclosure_case;
+    global_unban_disclosure_case;
+    global_ban_mutation_failure_case;
+    global_unban_mutation_failure_case;
+    unban_lookup_failure_case;
+    unban_mutation_failure_case;
+  ]
 
 (* --- typed Top Mod promotion error contract --- *)
 
 let q_break_path = (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO ''"
 
-let q_reset_path = (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO public"
+let q_reset_path =
+  (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO public"
 
 let promote_typed_contract_case =
   db_case
@@ -762,32 +836,40 @@ let promote_typed_contract_case =
          result must be the storage constructor, never a domain refusal. *)
       let* broke = C.exec q_break_path () in
       let* () = Lwt.map ignore (or_fail "break search_path" broke) in
-      let* storage = Earde.Moderator_store.promote_to_top_mod (module C) uid cid in
+      let* storage =
+        Earde.Moderator_store.promote_to_top_mod (module C) uid cid
+      in
       let* reset = C.exec q_reset_path () in
       let* () = Lwt.map ignore (or_fail "reset search_path" reset) in
       (match storage with
-       | Error (Earde.Moderator_store.Promotion_storage_error s) ->
-           Alcotest.(check bool) "storage detail retained for the log" true
-             (String.length s > 0)
-       | Error (Earde.Moderator_store.Promotion_refused m) ->
-           Alcotest.failf "storage failure classified as domain: %s" m
-       | Ok () -> Alcotest.fail "succeeded on a broken connection");
+      | Error (Earde.Moderator_store.Promotion_storage_error s) ->
+          Alcotest.(check bool)
+            "storage detail retained for the log" true
+            (String.length s > 0)
+      | Error (Earde.Moderator_store.Promotion_refused m) ->
+          Alcotest.failf "storage failure classified as domain: %s" m
+      | Ok () -> Alcotest.fail "succeeded on a broken connection");
       (* A non-moderator target is a domain refusal with the fixed friendly
          message, never a storage error. *)
-      let* refused = Earde.Moderator_store.promote_to_top_mod (module C) uid cid in
+      let* refused =
+        Earde.Moderator_store.promote_to_top_mod (module C) uid cid
+      in
       (match refused with
-       | Error (Earde.Moderator_store.Promotion_refused m) ->
-           Alcotest.(check string) "friendly domain message"
-             "User is not a moderator of this community" m
-       | Error (Earde.Moderator_store.Promotion_storage_error s) ->
-           Alcotest.failf "domain refusal classified as storage: %s" s
-       | Ok () -> Alcotest.fail "promoted a non-moderator");
+      | Error (Earde.Moderator_store.Promotion_refused m) ->
+          Alcotest.(check string)
+            "friendly domain message"
+            "User is not a moderator of this community" m
+      | Error (Earde.Moderator_store.Promotion_storage_error s) ->
+          Alcotest.failf "domain refusal classified as storage: %s" s
+      | Ok () -> Alcotest.fail "promoted a non-moderator");
       Lwt.return_unit)
 
 let promote_router =
   Dream.router
-    [ Dream.post "/c/:slug/manage-mods/promote"
-        Earde.Moderation_handlers.manage_mods_promote_handler ]
+    [
+      Dream.post "/c/:slug/manage-mods/promote"
+        Earde.Moderation_handlers.manage_mods_promote_handler;
+    ]
 
 let promote_storage_disclosure_case =
   db_case "promote: a storage failure renders only the generic message"
@@ -833,15 +915,19 @@ let promote_domain_message_case =
       Lwt.return_unit)
 
 let promotion_suite =
-  [ promote_typed_contract_case; promote_storage_disclosure_case;
-    promote_domain_message_case ]
+  [
+    promote_typed_contract_case;
+    promote_storage_disclosure_case;
+    promote_domain_message_case;
+  ]
 
 let suites =
-    (* Correctness boundaries: /search link URL encoding (DB-free),
+  (* Correctness boundaries: /search link URL encoding (DB-free),
        untrusted header values, forced-database-failure disclosure, and the
        typed promotion error contract (gated). *)
-  [ ("boundary_search_url_encoding", url_suite)
-  ; ("boundary_untrusted_headers", header_suite)
-  ; ("boundary_db_error_disclosure", disclosure_suite)
-  ; ("boundary_promotion_errors", promotion_suite)
+  [
+    ("boundary_search_url_encoding", url_suite);
+    ("boundary_untrusted_headers", header_suite);
+    ("boundary_db_error_disclosure", disclosure_suite);
+    ("boundary_promotion_errors", promotion_suite);
   ]

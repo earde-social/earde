@@ -31,7 +31,8 @@ let read path =
 
 let gate_link = "<link rel='stylesheet' href='/static/css/mobile-gate.css'>"
 
-let gate_open = "<div class='mobile-gate' role='dialog' aria-label='Desktop only'>"
+let gate_open =
+  "<div class='mobile-gate' role='dialog' aria-label='Desktop only'>"
 
 let gate_end = "Mobile support is coming later.</p></div></div>"
 
@@ -63,10 +64,12 @@ let check_gated label body =
     (Html_assert.contains body "<body class='launch-bring'>");
   Alcotest.(check int)
     (label ^ ": exactly one mobile-gate.css link")
-    1 (Html_assert.count_sub body gate_link);
+    1
+    (Html_assert.count_sub body gate_link);
   Alcotest.(check int)
     (label ^ ": exactly one gate panel")
-    1 (Html_assert.count_sub body gate_open);
+    1
+    (Html_assert.count_sub body gate_open);
   Alcotest.(check string)
     (label ^ ": canonical panel, not a second desktop-only page")
     (canonical_panel ()) (panel_of label body)
@@ -123,10 +126,23 @@ let no_state_in_gate_case =
         (fun needle ->
           Alcotest.(check bool)
             ("gate panel leaks " ^ needle)
-            false (Html_assert.contains panel needle))
-        [ "github"; "install"; "repositor"; "project"; "onboard"
-        ; "/integrations"; "user_id"; "alice"; "42"; "auth-alert"
-        ; "<form"; " id='"; "href=" ])
+            false
+            (Html_assert.contains panel needle))
+        [
+          "github";
+          "install";
+          "repositor";
+          "project";
+          "onboard";
+          "/integrations";
+          "user_id";
+          "alice";
+          "42";
+          "auth-alert";
+          "<form";
+          " id='";
+          "href=";
+        ])
 
 (* The panel is the .app column's sibling, not its descendant, so the
    [> .app] hide rule takes the whole onboarding UI with it and leaves the
@@ -134,13 +150,20 @@ let no_state_in_gate_case =
    .app close and nothing else. *)
 let placement_case =
   case "the gate sits outside the hidden .app column" (fun () ->
-      let body = Bring_fixture.body_of (Bring_fixture.run ~session:Bring_fixture.member ()) in
-      match (Html_assert.index_of body "</footer>", Html_assert.index_of body gate_open) with
+      let body =
+        Bring_fixture.body_of
+          (Bring_fixture.run ~session:Bring_fixture.member ())
+      in
+      match
+        ( Html_assert.index_of body "</footer>",
+          Html_assert.index_of body gate_open )
+      with
       | Some f, Some g ->
           let f = f + String.length "</footer>" in
           Alcotest.(check bool) "gate follows the app column" true (g > f);
-          Alcotest.(check string) "only the .app close in between"
-            "\n</div>\n" (String.sub body f (g - f))
+          Alcotest.(check string)
+            "only the .app close in between" "\n</div>\n"
+            (String.sub body f (g - f))
       | _ -> Alcotest.fail "/bring lost its footer or its gate")
 
 (* 3./4. Desktop is untouched: strip the two fragments the gate adds and the
@@ -168,67 +191,89 @@ let desktop_unchanged_case =
         |> remove_once "gate link" (gate_link ^ "\n")
         |> remove_once "gate panel" (panel_of "gated" gated ^ "\n")
       in
-      Alcotest.(check string) "identical to the ungated document"
-        (entry_doc ()) stripped)
+      Alcotest.(check string)
+        "identical to the ungated document" (entry_doc ()) stripped)
 
 (* And the page a desktop viewer reads is still the onboarding page. *)
 let desktop_content_case =
   case "desktop /bring still renders the onboarding page" (fun () ->
       let anon = Bring_fixture.body_of (Bring_fixture.run ()) in
-      Alcotest.(check bool) "anonymous: hero" true
+      Alcotest.(check bool)
+        "anonymous: hero" true
         (Html_assert.contains anon "Bring your open-source community");
-      Alcotest.(check bool) "anonymous: both home options" true
+      Alcotest.(check bool)
+        "anonymous: both home options" true
         (Html_assert.contains anon "Create a community home"
         && Html_assert.contains anon "Connect to an existing community");
-      Alcotest.(check bool) "anonymous: account-required panel" true
+      Alcotest.(check bool)
+        "anonymous: account-required panel" true
         (Html_assert.contains anon Bring_fixture.login_copy);
       let member =
-        Bring_fixture.body_of (Bring_fixture.run ~session:Bring_fixture.member ())
+        Bring_fixture.body_of
+          (Bring_fixture.run ~session:Bring_fixture.member ())
       in
-      Alcotest.(check int) "member: the one start form survives" 1
+      Alcotest.(check int)
+        "member: the one start form survives" 1
         (Html_assert.count_sub member Bring_fixture.start_action);
-      Alcotest.(check bool) "member: full button label" true
+      Alcotest.(check bool)
+        "member: full button label" true
         (Html_assert.contains member Bring_fixture.button_copy))
 
 (* The gating itself: one authoritative breakpoint, one rule, reusing the
    existing per-route pattern. *)
 let css_contract_case =
-  case "one 800px hide rule for launch-bring, no second breakpoint"
-    (fun () ->
+  case "one 800px hide rule for launch-bring, no second breakpoint" (fun () ->
       let earde = read "static/css/earde.css" in
       let rule =
         "@media (max-width: 800px) {\n\
         \  body.launch-bring > .app { display: none !important; }\n\
          }"
       in
-      Alcotest.(check int) "exactly one launch-bring gate rule" 1
+      Alcotest.(check int)
+        "exactly one launch-bring gate rule" 1
         (Html_assert.count_sub earde rule);
-      Alcotest.(check int) "launch-bring is hidden nowhere else" 1
+      Alcotest.(check int)
+        "launch-bring is hidden nowhere else" 1
         (Html_assert.count_sub earde "body.launch-bring > .app");
       (* The panel's own stylesheet keeps the single breakpoint definition:
          invisible above it, the whole viewport below it. *)
       let gate_css = read "static/css/mobile-gate.css" in
-      Alcotest.(check bool) "panel hidden above the breakpoint" true
+      Alcotest.(check bool)
+        "panel hidden above the breakpoint" true
         (Html_assert.contains gate_css ".mobile-gate { display: none; }");
-      Alcotest.(check int) "one breakpoint in mobile-gate.css" 1
+      Alcotest.(check int)
+        "one breakpoint in mobile-gate.css" 1
         (Html_assert.count_sub gate_css "@media");
-      Alcotest.(check bool) "and it is the shared 800px one" true
+      Alcotest.(check bool)
+        "and it is the shared 800px one" true
         (Html_assert.contains gate_css "@media (max-width: 800px)"))
 
 let check_gated_document label html =
   Alcotest.(check int)
     (label ^ ": one mobile-gate.css link")
-    1 (Html_assert.count_sub html gate_link);
+    1
+    (Html_assert.count_sub html gate_link);
   Alcotest.(check string)
     (label ^ ": canonical panel")
     (canonical_panel ()) (panel_of label html)
 
 let gate_test_community : Earde.Community_types.community =
-  { id = 1; slug = "ocaml"; name = "OCaml"; description = None; rules = None
-  ; avatar_url = None; banner_url = None; allow_downvotes = true
-  ; sections_enabled = true; visibility = Earde.Community_types.Community_public
-  ; indexable = true; is_network_community = false
-  ; onboarding_state = Earde.Community_types.Community_published; discoverable = true }
+  {
+    id = 1;
+    slug = "ocaml";
+    name = "OCaml";
+    description = None;
+    rules = None;
+    avatar_url = None;
+    banner_url = None;
+    allow_downvotes = true;
+    sections_enabled = true;
+    visibility = Earde.Community_types.Community_public;
+    indexable = true;
+    is_network_community = false;
+    onboarding_state = Earde.Community_types.Community_published;
+    discoverable = true;
+  }
 
 (* 7. The canonical implementation elsewhere is untouched: still one
    definition, still shipped by the same application wrappers, and still
@@ -236,49 +281,65 @@ let gate_test_community : Earde.Community_types.community =
    on a phone. *)
 let elsewhere_unchanged_case =
   case "the canonical gate elsewhere is unchanged" (fun () ->
-      Alcotest.(check int) "one panel definition" 1
+      Alcotest.(check int)
+        "one panel definition" 1
         (Source_census.count_everywhere "let mobile_desktop_gate");
-      Alcotest.(check int) "one stylesheet-link definition" 1
+      Alcotest.(check int)
+        "one stylesheet-link definition" 1
         (Source_census.count_everywhere "let mobile_gate_css_link");
       let community = gate_test_community in
       List.iter
         (fun (label, html) -> check_gated_document label html)
-        [ ( "launch_app_page"
-          , Earde.Page_shell.launch_app_page ~user:"alice"
-              ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") () )
-        ; ( "launch_onboarding_page"
-          , Earde.Page_shell.launch_onboarding_page ~user:"alice"
-              ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
-        ; ( "launch_community_page"
-          , Earde.Community_shell.launch_community_page ~user:"alice" ~community
-              ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-overview"
-              ~title:"T" ~content:(Earde.Html.static "B") () )
+        [
+          ( "launch_app_page",
+            Earde.Page_shell.launch_app_page ~user:"alice"
+              ~page_class:"launch-feed" ~title:"T"
+              ~content:(Earde.Html.static "B") () );
+          ( "launch_onboarding_page",
+            Earde.Page_shell.launch_onboarding_page ~user:"alice"
+              ~page_class:"launch-project-new" ~title:"T"
+              ~content:(Earde.Html.static "B") () );
+          ( "launch_community_page",
+            Earde.Community_shell.launch_community_page ~user:"alice" ~community
+              ~sidebar:(Earde.Html.static "S")
+              ~page_class:"launch-community-overview" ~title:"T"
+              ~content:(Earde.Html.static "B") () );
         ];
       List.iter
         (fun (label, html) ->
           Alcotest.(check int)
             (label ^ ": still ungated")
-            0 (Html_assert.count_sub html "mobile-gate"))
-        [ ( "launch_entry_page (/privacy)"
-          , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
-              ~title:"T" ~content:(Earde.Html.static "B") () )
-        ; ( "launch_auth_page"
-          , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
-              ~title:"T" ~content:(Earde.Html.static "B") () )
-        ; ( "launch_message_page"
-          , Earde.Page_shell.launch_message_page ~title:"T" ~content:(Earde.Html.static "B") () )
+            0
+            (Html_assert.count_sub html "mobile-gate"))
+        [
+          ( "launch_entry_page (/privacy)",
+            Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
+              ~title:"T" ~content:(Earde.Html.static "B") () );
+          ( "launch_auth_page",
+            Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
+              ~title:"T" ~content:(Earde.Html.static "B") () );
+          ( "launch_message_page",
+            Earde.Page_shell.launch_message_page ~title:"T"
+              ~content:(Earde.Html.static "B") () );
         ])
 
 let suite =
-  [ anonymous_case; authenticated_case; every_state_case;
-    no_state_in_gate_case; placement_case; desktop_unchanged_case;
-    desktop_content_case; css_contract_case; elsewhere_unchanged_case ]
+  [
+    anonymous_case;
+    authenticated_case;
+    every_state_case;
+    no_state_in_gate_case;
+    placement_case;
+    desktop_unchanged_case;
+    desktop_content_case;
+    css_contract_case;
+    elsewhere_unchanged_case;
+  ]
 
 let suites =
-    (* /bring is gated by the canonical desktop-only mechanism: a mobile
+  (* /bring is gated by the canonical desktop-only mechanism: a mobile
        visitor gets the shared "Desktop only for now" panel instead of an
        entry point into the desktop-only project-onboarding funnel, in every
        access state and regardless of authentication (see
        Bring_desktop_gate). *)
-  [ ( "bring_desktop_gate", suite )
-  ]
+  [ ("bring_desktop_gate", suite) ]

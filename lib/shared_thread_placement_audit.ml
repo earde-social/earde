@@ -15,9 +15,7 @@ type action =
   | Placement_removed
   | Placement_withdrawn
 
-type error =
-  | Inconsistent_data
-  | Storage_error
+type error = Inconsistent_data | Storage_error
 
 (* The durable vocabulary, byte-for-byte the table's CHECK. Shared with the
    read side so the five spellings exist in exactly one place. *)
@@ -28,14 +26,6 @@ let string_of_action = function
   | Placement_removed -> "shared_thread_removed"
   | Placement_withdrawn -> "shared_thread_withdrawn"
 
-let action_of_string = function
-  | "shared_thread_requested" -> Some Placement_requested
-  | "shared_thread_accepted" -> Some Placement_accepted
-  | "shared_thread_rejected" -> Some Placement_rejected
-  | "shared_thread_removed" -> Some Placement_removed
-  | "shared_thread_withdrawn" -> Some Placement_withdrawn
-  | _ -> None
-
 (* created_at rides the database default so the event timestamp comes from
    the same clock as the business row it describes. RETURNING both id and
    action lets the caller-side revalidation prove the row landed
@@ -43,12 +33,10 @@ let action_of_string = function
 let insert_event_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t3 string int int64) (t3 int int int))
-   ->? Caqti_type.(t2 int64 string))
-  "INSERT INTO shared_thread_placement_audit_events \
-     (action, actor_user_id, placement_id, post_id, \
-      origin_community_id, destination_community_id) \
-   VALUES ($1, $2, $3, $4, $5, $6) \
-   RETURNING id, action"
+  ->? Caqti_type.(t2 int64 string))
+    "INSERT INTO shared_thread_placement_audit_events (action, actor_user_id, \
+     placement_id, post_id, origin_community_id, destination_community_id) \
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, action"
 
 let insert (module C : Caqti_lwt.CONNECTION) ~action ~actor_user_id
     ~placement_id ~post_id ~origin_community_id ~destination_community_id =
@@ -56,8 +44,7 @@ let insert (module C : Caqti_lwt.CONNECTION) ~action ~actor_user_id
   if
     actor_user_id <= 0
     || Int64.compare placement_id 0L <= 0
-    || post_id <= 0
-    || origin_community_id <= 0
+    || post_id <= 0 || origin_community_id <= 0
     || destination_community_id <= 0
     || origin_community_id = destination_community_id
   then

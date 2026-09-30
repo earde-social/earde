@@ -41,10 +41,10 @@ let valid_selection ~selected_snapshot_ids ~primary_snapshot_id =
   List.length selected_snapshot_ids <= selection_limit
   && List.for_all positive selected_snapshot_ids
   && all_distinct selected_snapshot_ids
-  && (match primary_snapshot_id with
-     | None -> true
-     | Some id ->
-         positive id && List.exists (Int64.equal id) selected_snapshot_ids)
+  &&
+  match primary_snapshot_id with
+  | None -> true
+  | Some id -> positive id && List.exists (Int64.equal id) selected_snapshot_ids
 
 (* Authorization and the row lock in one statement: the draft id is never
    fetched alone and checked in OCaml. Availability mirrors the read
@@ -56,16 +56,10 @@ let valid_selection ~selected_snapshot_ids ~primary_snapshot_id =
 let authorize_draft_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.bool)
-  "SELECT TRUE \
-   FROM project_onboarding_drafts d \
-   JOIN github_installations i ON i.id = d.github_installation_record_id \
-   WHERE d.id = $1 \
-     AND d.user_id = $2 \
-     AND d.status = 'active' \
-     AND d.expires_at > NOW() \
-     AND i.status = 'active' \
-     AND i.revoked_at IS NULL \
-   FOR UPDATE OF d"
+    "SELECT TRUE FROM project_onboarding_drafts d JOIN github_installations i \
+     ON i.id = d.github_installation_record_id WHERE d.id = $1 AND d.user_id = \
+     $2 AND d.status = 'active' AND d.expires_at > NOW() AND i.status = \
+     'active' AND i.revoked_at IS NULL FOR UPDATE OF d"
 
 (* The complete current snapshot, locked under the already-held draft
    lock (never the other way around). Only identity and selection state
@@ -73,11 +67,9 @@ let authorize_draft_query =
 let load_snapshot_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->* Caqti_type.(t2 (t2 int64 int) (t2 bool bool)))
-  "SELECT id, position, is_selected, is_primary \
-   FROM project_onboarding_draft_repositories \
-   WHERE draft_id = $1 \
-   ORDER BY position \
-   FOR UPDATE"
+    "SELECT id, position, is_selected, is_primary FROM \
+     project_onboarding_draft_repositories WHERE draft_id = $1 ORDER BY \
+     position FOR UPDATE"
 
 (* Structural invariants the write side and schema promise; rows arrive
    ordered by position, so contiguity from 1 also rules out duplicate
@@ -112,9 +104,8 @@ let validate_snapshot rows =
 let reset_selection_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_onboarding_draft_repositories \
-   SET is_selected = FALSE, is_primary = FALSE, updated_at = NOW() \
-   WHERE draft_id = $1"
+    "UPDATE project_onboarding_draft_repositories SET is_selected = FALSE, \
+     is_primary = FALSE, updated_at = NOW() WHERE draft_id = $1"
 
 (* Step two, one prepared statement reused per selected row. id is the
    primary key, so RETURNING TRUE yields exactly zero or one row; the
@@ -125,10 +116,9 @@ let reset_selection_query =
 let select_row_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 int64 int64 bool) ->? Caqti_type.bool)
-  "UPDATE project_onboarding_draft_repositories \
-   SET is_selected = TRUE, is_primary = $3, updated_at = NOW() \
-   WHERE id = $1 AND draft_id = $2 \
-   RETURNING TRUE"
+    "UPDATE project_onboarding_draft_repositories SET is_selected = TRUE, \
+     is_primary = $3, updated_at = NOW() WHERE id = $1 AND draft_id = $2 \
+     RETURNING TRUE"
 
 (* Only the modification timestamp moves: expiry remains the verification
    freshness boundary that solely a new successful GitHub verification may
@@ -141,9 +131,8 @@ let select_row_query =
 let touch_draft_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_onboarding_drafts \
-   SET updated_at = GREATEST(NOW(), created_at) \
-   WHERE id = $1"
+    "UPDATE project_onboarding_drafts SET updated_at = GREATEST(NOW(), \
+     created_at) WHERE id = $1"
 
 module Id_set = Set.Make (Int64)
 
@@ -151,8 +140,8 @@ let replace (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id
     ~selected_snapshot_ids ~primary_snapshot_id =
   if not (valid_user_id user_id) then Lwt.return (Error Invalid_user_id)
   else if not (positive draft_id) then Lwt.return (Error Invalid_draft_id)
-  else if not (valid_selection ~selected_snapshot_ids ~primary_snapshot_id)
-  then Lwt.return (Error Invalid_selection)
+  else if not (valid_selection ~selected_snapshot_ids ~primary_snapshot_id) then
+    Lwt.return (Error Invalid_selection)
   else
     (* As in the sibling stores, every Caqti error is dropped payload-free —
        error payloads can echo SQL parameters — and rollback failure adds
@@ -176,8 +165,7 @@ let replace (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id
               | Error _ -> Lwt.return (Error Storage_error)
               | Ok () -> Lwt.return (Ok ())))
       | id :: rest -> (
-          C.find_opt select_row_query (id, draft_id, is_primary id)
-          >>= function
+          C.find_opt select_row_query (id, draft_id, is_primary id) >>= function
           | Error _ -> rollback_to Storage_error
           | Ok None -> rollback_to Inconsistent_data
           | Ok (Some _) -> apply_selection rest)
@@ -199,7 +187,7 @@ let replace (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id
             | Ok rows -> (
                 match validate_snapshot rows with
                 | Error () -> rollback_to Inconsistent_data
-                | Ok snapshot_ids ->
+                | Ok snapshot_ids -> (
                     (* Stale detection only after owner authorization: a
                        supplied id either names a row of this exact locked
                        snapshot or the submission is stale — where else the
@@ -209,11 +197,12 @@ let replace (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id
                     if
                       not
                         (List.for_all in_snapshot selected_snapshot_ids
-                        && (match primary_snapshot_id with
-                           | None -> true
-                           | Some id -> in_snapshot id))
+                        &&
+                        match primary_snapshot_id with
+                        | None -> true
+                        | Some id -> in_snapshot id)
                     then rollback_to Selection_stale
-                    else (
+                    else
                       C.exec reset_selection_query draft_id >>= function
                       | Error _ -> rollback_to Storage_error
                       | Ok () -> apply_selection selected_snapshot_ids))))

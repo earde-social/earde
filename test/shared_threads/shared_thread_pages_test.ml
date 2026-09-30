@@ -11,12 +11,10 @@
 module Pg = Earde.Shared_thread_placement_pages
 
 let contains haystack needle = Html_assert.occurs haystack ~needle
-
 let case name f = Alcotest.test_case name `Quick f
 
 let must body needle =
-  if not (contains body needle) then
-    Alcotest.failf "missing fragment %S" needle
+  if not (contains body needle) then Alcotest.failf "missing fragment %S" needle
 
 let must_not body needle =
   if contains body needle then Alcotest.failf "forbidden fragment %S" needle
@@ -129,8 +127,7 @@ let no_script_case =
   case "both pages emit no JavaScript and no inline handlers" (fun () ->
       let sectioned =
         management_state ~sections_enabled:true
-          ~section_options:
-            [ { Pg.section_id = "3"; section_name = "General" } ]
+          ~section_options:[ { Pg.section_id = "3"; section_name = "General" } ]
           ~incoming:[ pending_entry ~note:"a note" () ]
           ~outgoing:[ pending_entry ~id:"10" () ]
           ~shared_into:[ accepted_entry ~section:"General" () ]
@@ -143,7 +140,8 @@ let no_script_case =
             (share_state
                ~candidates:[ candidate () ]
                ~placements:
-                 [ placement ~withdraw:true ();
+                 [
+                   placement ~withdraw:true ();
                    placement ~id:"8" ~pending:false ~remove:true ();
                  ]
                ~manage_connections:true ())
@@ -165,7 +163,8 @@ let share_form_case =
              ~state:
                (share_state
                   ~candidates:
-                    [ candidate ~name:"Alpha" ~slug:"sth-ui-alpha" ();
+                    [
+                      candidate ~name:"Alpha" ~slug:"sth-ui-alpha" ();
                       candidate ~name:"beta" ~slug:"sth-ui-beta" ();
                     ]
                   ())
@@ -204,7 +203,8 @@ let share_controls_case =
              ~state:
                (share_state
                   ~placements:
-                    [ placement ~id:"7" ~withdraw:false ();
+                    [
+                      placement ~id:"7" ~withdraw:false ();
                       placement ~id:"8" ~withdraw:true ();
                       placement ~id:"9" ~pending:false ~remove:false ();
                       placement ~id:"10" ~pending:false ~remove:true ();
@@ -226,30 +226,28 @@ let share_controls_case =
       must_not body "transition")
 
 let note_case =
-  case "both pages: the private note renders only when supplied, labelled \
-        and escaped" (fun () ->
+  case
+    "both pages: the private note renders only when supplied, labelled and \
+     escaped" (fun () ->
       let marker = "SthUiNote <b>bold</b> & 'quoted'" in
       let with_note =
         fragment
           (share
-             ~state:
-               (share_state ~placements:[ placement ~note:marker () ] ())
+             ~state:(share_state ~placements:[ placement ~note:marker () ] ())
              ())
       in
       must with_note "Private note";
       must with_note "SthUiNote &lt;b&gt;bold&lt;/b&gt; &amp; &#39;quoted&#39;";
       must_not with_note "<b>bold</b>";
       let without =
-        fragment
-          (share ~state:(share_state ~placements:[ placement () ] ()) ())
+        fragment (share ~state:(share_state ~placements:[ placement () ] ()) ())
       in
       must_not without "Private note";
       let mgmt =
         fragment
           (manage
              ~state:
-               (management_state ~incoming:[ pending_entry ~note:marker () ]
-                  ())
+               (management_state ~incoming:[ pending_entry ~note:marker () ] ())
              ())
       in
       must mgmt "SthUiNote &lt;b&gt;bold&lt;/b&gt; &amp; &#39;quoted&#39;")
@@ -263,8 +261,7 @@ let escaping_case =
           (manage
              ~state:
                (management_state
-                  ~incoming:
-                    [ pending_entry ~title ~cname:name () ]
+                  ~incoming:[ pending_entry ~title ~cname:name () ]
                   ())
              ())
       in
@@ -274,15 +271,17 @@ let escaping_case =
       must_not body "<img src=x")
 
 let selector_case =
-  case "management page: one section selector per accept form, flat pages \
-        none, ineligible pages an unavailable notice" (fun () ->
+  case
+    "management page: one section selector per accept form, flat pages none, \
+     ineligible pages an unavailable notice" (fun () ->
       let sectioned =
         fragment
           (manage
              ~state:
                (management_state ~sections_enabled:true
                   ~section_options:
-                    [ { Pg.section_id = "3"; section_name = "General" };
+                    [
+                      { Pg.section_id = "3"; section_name = "General" };
                       { Pg.section_id = "4"; section_name = "Help" };
                     ]
                   ~incoming:[ pending_entry () ]
@@ -334,35 +333,32 @@ let notice_case =
   case "each closed notice renders its copy; feedback renders alongside"
     (fun () ->
       List.iter
-        (fun (notice, needle) ->
-          must (fragment (manage ~notice ())) needle)
-        [ (Pg.Request_accepted, "now shared into this community");
+        (fun (notice, needle) -> must (fragment (manage ~notice ())) needle)
+        [
+          (Pg.Request_accepted, "now shared into this community");
           (Pg.Request_rejected, "The request was declined");
           (Pg.Request_withdrawn, "sharing request was withdrawn");
           (Pg.Placement_removed, "no longer shared");
         ];
-      must
-        (fragment (share ~notice:Pg.Request_sent ()))
-        "Sharing request sent";
+      must (fragment (share ~notice:Pg.Request_sent ())) "Sharing request sent";
       must
         (fragment (share ~feedback:Pg.Already_shared ()))
         "already shared with that community";
-      must
-        (fragment (manage ~feedback:Pg.Stale_form ()))
-        "open too long")
+      must (fragment (manage ~feedback:Pg.Stale_form ())) "open too long")
 
 let degraded_case =
-  case "a non-addressable slug or a non-decimal id drops the actionable \
-        form, never the row" (fun () ->
+  case
+    "a non-addressable slug or a non-decimal id drops the actionable form, \
+     never the row" (fun () ->
       let body =
         fragment
           (share
              ~state:
                (share_state
                   ~placements:
-                    [ placement ~id:"7'; DROP" ~withdraw:true ();
-                      placement ~id:"8" ~slug:"evil/../slug" ~withdraw:true
-                        ();
+                    [
+                      placement ~id:"7'; DROP" ~withdraw:true ();
+                      placement ~id:"8" ~slug:"evil/../slug" ~withdraw:true ();
                     ]
                   ())
              ())
@@ -372,16 +368,25 @@ let degraded_case =
       must_not body "evil/../slug/withdraw")
 
 let suite =
-  [ sections_order_case; no_script_case; share_form_case; share_empty_case
-  ; share_controls_case; note_case; escaping_case; selector_case
-  ; section_label_case; notice_case; degraded_case ]
+  [
+    sections_order_case;
+    no_script_case;
+    share_form_case;
+    share_empty_case;
+    share_controls_case;
+    note_case;
+    escaping_case;
+    selector_case;
+    section_label_case;
+    notice_case;
+    degraded_case;
+  ]
 
 let suites =
-    (* Shared threads, slice 2 (HTTP workflow): the pure page renders are
+  (* Shared threads, slice 2 (HTTP workflow): the pure page renders are
        DB-free; the Share and management surfaces, the five mutations'
        authorization, subject binding, and CSRF behavior, the notification
        rendering with its current-access gating, and the read-side
        boundary all run over the real routed pipeline against the gated
        database. *)
-  [ ("shared_thread_pages_ui", suite)
-  ]
+  [ ("shared_thread_pages_ui", suite) ]

@@ -2,12 +2,13 @@
    store calls, over a gated connection. *)
 
 let ( let* ) = Lwt.bind
-open Caqti_request.Infix
 
+open Caqti_request.Infix
 module P = Earde.Shared_thread_placements
 module Store = Earde.Shared_thread_placement_store
 module Cc = Earde.Community_connections
 module Ccs = Earde.Community_connections_store
+
 let or_fail = Db_fixture.or_fail
 let insert_user = Db_fixture.insert_user
 let exec = Db_fixture.exec
@@ -50,44 +51,38 @@ let error_str : Store.error -> string = function
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP TRIGGER IF EXISTS stp_fail_audit \
-       ON shared_thread_placement_audit_events"
-    ; "DROP TRIGGER IF EXISTS stp_fail_business ON shared_thread_placements"
-    ; "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications"
-    ; "DROP FUNCTION IF EXISTS stp_fail_fn()"
-    ; "DELETE FROM notifications \
-       WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stp_%')"
-    ; "DELETE FROM notifications \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM shared_thread_placement_audit_events \
-       WHERE origin_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
-          OR destination_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM shared_thread_placements \
-       WHERE origin_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
-          OR destination_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM community_connection_audit_events \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM community_connections \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM posts \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM community_sections \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'stp-%'"
-    ; "DELETE FROM users WHERE username LIKE 'stp_%'"
+    [
+      "DROP TRIGGER IF EXISTS stp_fail_audit ON \
+       shared_thread_placement_audit_events";
+      "DROP TRIGGER IF EXISTS stp_fail_business ON shared_thread_placements";
+      "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications";
+      "DROP FUNCTION IF EXISTS stp_fail_fn()";
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'stp_%')";
+      "DELETE FROM notifications WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stp-%')";
+      "DELETE FROM shared_thread_placement_audit_events WHERE \
+       origin_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stp-%') OR destination_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'stp-%')";
+      "DELETE FROM shared_thread_placements WHERE origin_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'stp-%') OR \
+       destination_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stp-%')";
+      "DELETE FROM community_connection_audit_events WHERE \
+       requester_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stp-%') OR recipient_community_id IN (SELECT id FROM communities WHERE \
+       slug LIKE 'stp-%')";
+      "DELETE FROM community_connections WHERE requester_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'stp-%') OR \
+       recipient_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stp-%')";
+      "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'stp-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stp-%')";
+      "DELETE FROM communities WHERE slug LIKE 'stp-%'";
+      "DELETE FROM users WHERE username LIKE 'stp_%'";
     ]
 
 let db_case name f =
@@ -110,54 +105,52 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_post =
   (Caqti_type.(t3 int int (option int)) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id, section_id) \
-   VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
 
 let insert_post ?section conn ~community ~author =
   find conn "post fixture" q_insert_post (community, author, section)
 
 let q_tombstone =
   (Caqti_type.(t2 int string) ->. Caqti_type.unit)
-  "UPDATE posts SET content = $2 WHERE id = $1"
+    "UPDATE posts SET content = $2 WHERE id = $1"
 
 let tombstone conn post label = exec conn "tombstone" q_tombstone (post, label)
 
 let q_set_sections =
   (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
-  "UPDATE communities SET sections_enabled = $2 WHERE id = $1"
+    "UPDATE communities SET sections_enabled = $2 WHERE id = $1"
 
 let q_insert_section =
   (Caqti_type.(t2 int string) ->! Caqti_type.int)
-  "INSERT INTO community_sections (community_id, name, slug) \
-   VALUES ($1, $2, $2) RETURNING id"
+    "INSERT INTO community_sections (community_id, name, slug) VALUES ($1, $2, \
+     $2) RETURNING id"
 
 let q_delete_section =
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM community_sections WHERE id = $1"
+    "DELETE FROM community_sections WHERE id = $1"
 
 let q_make_eligible =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE communities SET visibility = 'public', \
-   onboarding_state = 'published', indexable = TRUE, discoverable = TRUE \
-   WHERE id = $1"
+    "UPDATE communities SET visibility = 'public', onboarding_state = \
+     'published', indexable = TRUE, discoverable = TRUE WHERE id = $1"
 
 let q_insert_comment =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "INSERT INTO comments (content, post_id, user_id) \
-   VALUES ('kept', $1, $2) RETURNING id"
+    "INSERT INTO comments (content, post_id, user_id) VALUES ('kept', $1, $2) \
+     RETURNING id"
 
 (* Accepted community connection through the real connections store, so
    the standing this feature rides on is exactly the durable one. *)
 let connect conn ~actor a b =
   let value =
     match
-      Cc.create_pending ~requester_community_id:a
-        ~recipient_community_id:b ~request_note:None
+      Cc.create_pending ~requester_community_id:a ~recipient_community_id:b
+        ~request_note:None
     with
     | Ok v -> v
     | Error _ -> Alcotest.fail "fixture: connection value refused"
@@ -177,7 +170,8 @@ let connect conn ~actor a b =
   match reviewed with
   | Ok _ -> Lwt.return connection
   | Error e ->
-      Alcotest.failf "fixture: connection accept %s" (Community_fixture.error_str e)
+      Alcotest.failf "fixture: connection accept %s"
+        (Community_fixture.error_str e)
 
 let disconnect conn ~actor ~connection ~acting =
   let* removed =
@@ -206,22 +200,21 @@ let fixture conn tag =
    move. *)
 let q_events_for_post =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM shared_thread_placement_audit_events \
-   WHERE post_id = $1"
+    "SELECT COUNT(*) FROM shared_thread_placement_audit_events WHERE post_id = \
+     $1"
 
 let q_notifs_for_post =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM notifications n \
-   WHERE n.shared_thread_placement_id IN \
-     (SELECT id FROM shared_thread_placements WHERE post_id = $1)"
+    "SELECT COUNT(*) FROM notifications n WHERE n.shared_thread_placement_id \
+     IN (SELECT id FROM shared_thread_placements WHERE post_id = $1)"
 
 let q_post_row =
   (Caqti_type.int ->! Caqti_type.(t2 string (option string)))
-  "SELECT title, content FROM posts WHERE id = $1"
+    "SELECT title, content FROM posts WHERE id = $1"
 
 let q_comment_count =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM comments WHERE post_id = $1"
+    "SELECT COUNT(*) FROM comments WHERE post_id = $1"
 
 let request conn ~actor ?note ~post ~destination () =
   Store.request conn ~actor_user_id:actor ~post_id:post
@@ -237,8 +230,7 @@ let review conn ~reviewer ~placement ~destination decision =
   Store.review conn ~reviewer_user_id:reviewer ~placement_id:placement
     ~destination_community_id:destination ~decision
 
-let review_ok label conn ~reviewer ~placement ~destination decision expected
-    =
+let review_ok label conn ~reviewer ~placement ~destination decision expected =
   let* r = review conn ~reviewer ~placement ~destination decision in
   match r with
   | Ok reviewed ->
@@ -273,17 +265,15 @@ let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let q_create_fail_fn =
   ddl
-    "CREATE FUNCTION stp_fail_fn() RETURNS trigger \
-     LANGUAGE plpgsql \
-     AS 'BEGIN RAISE EXCEPTION ''stp fixture failure''; END'"
+    "CREATE FUNCTION stp_fail_fn() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN \
+     RAISE EXCEPTION ''stp fixture failure''; END'"
 
 let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS stp_fail_fn()"
 
 let q_poison_notif =
   ddl
-    "CREATE TRIGGER stp_fail_notif \
-     BEFORE INSERT ON notifications \
-     FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+    "CREATE TRIGGER stp_fail_notif BEFORE INSERT ON notifications FOR EACH ROW \
+     EXECUTE FUNCTION stp_fail_fn()"
 
 let q_unpoison_notif =
   ddl "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications"

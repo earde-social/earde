@@ -1,6 +1,6 @@
-(** Reports / mod-queue value types. Closed variants keep raw strings out of the public
-    API and dynamic SQL; the DB CHECK constraints mirror them exactly. The [*_of_string]
-    helpers are partial (None off-enum). *)
+(** Reports / mod-queue value types. Closed variants keep raw strings out of the
+    public API and dynamic SQL; the DB CHECK constraints mirror them exactly.
+    The [*_of_string] helpers are partial (None off-enum). *)
 type report_target = Report_post | Report_comment | Report_chat_message
 
 type report_reason =
@@ -18,19 +18,12 @@ type report_action_kind =
   | Report_other_action
 
 val report_target_to_string : report_target -> string
-
 val report_target_of_string : string -> report_target option
-
 val report_reason_to_string : report_reason -> string
-
 val report_reason_of_string : string -> report_reason option
-
 val report_status_to_string : report_status -> string
-
 val report_status_of_string : string -> report_status option
-
 val report_action_kind_to_string : report_action_kind -> string
-
 val report_action_kind_of_string : string -> report_action_kind option
 
 (* Denormalized mod-queue row: reporter/author usernames are JOINed in (author optional). *)
@@ -57,15 +50,34 @@ type report_row = {
    same target already exists (ON CONFLICT DO NOTHING on the partial-unique index). *)
 val create_report :
   (module Caqti_lwt.CONNECTION) ->
-  community_id:int -> reporter_user_id:int -> target_type:report_target ->
-  target_id:int64 -> target_author_user_id:int option ->
-  reason:report_reason -> details:string option ->
+  community_id:int ->
+  reporter_user_id:int ->
+  target_type:report_target ->
+  target_id:int64 ->
+  target_author_user_id:int option ->
+  reason:report_reason ->
+  details:string option ->
   ([ `Created of int | `Duplicate ], string) result Lwt.t
+
 val get_reports_by_community :
-  (module Caqti_lwt.CONNECTION) -> int -> status:report_status -> (report_row list, string) result Lwt.t
+  (module Caqti_lwt.CONNECTION) ->
+  int ->
+  status:report_status ->
+  (report_row list, string) result Lwt.t
+
 val get_report_by_id :
-  (module Caqti_lwt.CONNECTION) -> int -> (report_row option, string) result Lwt.t
+  (module Caqti_lwt.CONNECTION) ->
+  int ->
+  (report_row option, string) result Lwt.t
+
 val resolve_report :
-  (module Caqti_lwt.CONNECTION) -> int -> resolver_user_id:int -> status:report_status ->
-  action_kind:report_action_kind option -> note:string option -> (unit, string) result Lwt.t
-val count_open_reports : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
+  (module Caqti_lwt.CONNECTION) ->
+  int ->
+  resolver_user_id:int ->
+  status:report_status ->
+  action_kind:report_action_kind option ->
+  note:string option ->
+  (unit, string) result Lwt.t
+
+val count_open_reports :
+  (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t

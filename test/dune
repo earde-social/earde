@@ -18,7 +18,22 @@
   (glob_files ../lib/*.mli))
  ; cohttp-lwt-unix provides the local Persons-API stub server for the step-7
  ; deletion-client tests — no real network or PostHog access.
- (libraries earde alcotest caqti caqti-lwt caqti-lwt.unix caqti-driver-postgresql lwt lwt.unix unix uri dream yojson cohttp cohttp-lwt cohttp-lwt-unix)
+ (libraries
+  earde
+  alcotest
+  caqti
+  caqti-lwt
+  caqti-lwt.unix
+  caqti-driver-postgresql
+  lwt
+  lwt.unix
+  unix
+  uri
+  dream
+  yojson
+  cohttp
+  cohttp-lwt
+  cohttp-lwt-unix)
  ; Referencing Earde.Handlers pulls in Auth's argon2 (ctypes) binding, which
  ; needs the system library linked explicitly — same flags as bin/dune.
  (link_flags

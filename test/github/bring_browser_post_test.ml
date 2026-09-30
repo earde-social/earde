@@ -23,8 +23,7 @@ let case = Case.quick
    HTML form POST — the serialized origin is replaced by "null" according
    to the request's referrer policy, which a navigation inherits from the
    document. Modelled here verbatim, over already-serialized origins. *)
-let browser_form_post_origin ~document_policy ~document_origin
-    ~target_origin =
+let browser_form_post_origin ~document_policy ~document_origin ~target_origin =
   let downgrade () =
     (* https document → non-https target. *)
     String.length document_origin >= 6
@@ -47,23 +46,22 @@ let browser_form_post_origin ~document_policy ~document_origin
    launch smoke test: the gate must accept both, and neither may depend on
    Sec-Fetch-Site to do it. *)
 let deployments =
-  [ ("production https", "https://earde.com",
-     Github_fixture.gac_of_values ());
-    ("loopback http", "http://localhost:8080",
-     Github_fixture.gac_of_values ~origin:(Some "http://localhost:8080")
-       ~setup:
-         (Some "http://localhost:8080/integrations/github/install/return")
-       ~callback:
-         (Some
-            "http://localhost:8080/integrations/github/authorize/callback")
-       ())
+  [
+    ("production https", "https://earde.com", Github_fixture.gac_of_values ());
+    ( "loopback http",
+      "http://localhost:8080",
+      Github_fixture.gac_of_values ~origin:(Some "http://localhost:8080")
+        ~setup:(Some "http://localhost:8080/integrations/github/install/return")
+        ~callback:
+          (Some "http://localhost:8080/integrations/github/authorize/callback")
+        () );
   ]
 
 (* The one journey: GET /bring, confirm the CTA form is really there, then
    POST it the way the browser that just rendered it would. *)
 let rendered_form_posts_case =
-  case "browser journey: the rendered /bring CTA posts and passes the \
-        start gates"
+  case
+    "browser journey: the rendered /bring CTA posts and passes the start gates"
     (fun () ->
       List.iter
         (fun (label, origin, config) ->
@@ -87,8 +85,8 @@ let rendered_form_posts_case =
             | None -> ""
           in
           let sent_origin =
-            browser_form_post_origin ~document_policy
-              ~document_origin:origin ~target_origin:origin
+            browser_form_post_origin ~document_policy ~document_origin:origin
+              ~target_origin:origin
           in
           (* Stated separately so a regression reads as the real defect
              ("the page made the browser send null") rather than as an
@@ -100,10 +98,11 @@ let rendered_form_posts_case =
           Http_fixture.check_db_boundary (label ^ ": start POST")
             (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in
                ~headers:
-                 [ ("Origin", sent_origin);
+                 [
+                   ("Origin", sent_origin);
                    ("Sec-Fetch-Site", "same-origin");
                    ("Sec-Fetch-Mode", "navigate");
-                   ("Content-Type", "application/x-www-form-urlencoded")
+                   ("Content-Type", "application/x-www-form-urlencoded");
                  ]
                ~mode:Ob.Public
                ~load_config:(fun () -> config)
@@ -115,14 +114,14 @@ let rendered_form_posts_case =
    null whatever fetch metadata claims. Without this, someone could
    "fix" a future 403 by loosening the gate instead of the page. *)
 let policy_mechanism_case =
-  case "browser journey: no-referrer nulls the Origin and the gate still \
-        refuses it"
-    (fun () ->
+  case
+    "browser journey: no-referrer nulls the Origin and the gate still refuses \
+     it" (fun () ->
       List.iter
         (fun (label, origin, config) ->
           let derive document_policy =
-            browser_form_post_origin ~document_policy
-              ~document_origin:origin ~target_origin:origin
+            browser_form_post_origin ~document_policy ~document_origin:origin
+              ~target_origin:origin
           in
           Alcotest.(check string)
             (label ^ ": no-referrer nulls the Origin")
@@ -135,12 +134,9 @@ let policy_mechanism_case =
              metadata: the fix belongs on the page, never on the gate. *)
           let response =
             Http_fixture.gate_response (label ^ ": null origin")
-              (Github_handler_fixture.gate_run
-                 ~session:Http_fixture.logged_in
+              (Github_handler_fixture.gate_run ~session:Http_fixture.logged_in
                  ~headers:
-                   [ ("Origin", "null");
-                     ("Sec-Fetch-Site", "same-origin")
-                   ]
+                   [ ("Origin", "null"); ("Sec-Fetch-Site", "same-origin") ]
                  ~mode:Ob.Public
                  ~load_config:(fun () -> config)
                  ())
@@ -154,9 +150,8 @@ let policy_mechanism_case =
 let suite = [ rendered_form_posts_case; policy_mechanism_case ]
 
 let suites =
-    (* The two halves joined: the /bring document as rendered decides the
+  (* The two halves joined: the /bring document as rendered decides the
        Origin a browser puts on the CTA's POST, so the page's referrer
        policy and the start handler's origin gate are tested together.
        DB-free. *)
-  [ ( "github_bring_browser_post", suite )
-  ]
+  [ ("github_bring_browser_post", suite) ]

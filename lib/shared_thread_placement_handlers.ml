@@ -52,7 +52,8 @@ let session_global_admin request =
    state: never cacheable, and never leaking onward as a cross-origin
    Referer. The pages stay noindex from the page module itself. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -61,7 +62,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -79,8 +81,8 @@ let login_redirect () = clean_redirect "/login"
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 let bad_request_page request =
   Dream.respond ~status:`Bad_Request ~headers:page_headers
@@ -164,9 +166,7 @@ let post_id_of_thread_param raw =
     | Some i -> String.sub raw 0 i
     | None -> raw
   in
-  match int_of_string_opt head with
-  | Some id when id > 0 -> Some id
-  | _ -> None
+  match int_of_string_opt head with Some id when id > 0 -> Some id | _ -> None
 
 (* --- Read model → page view models (mechanical, public accessors only) --- *)
 
@@ -268,8 +268,7 @@ let management_state_of_view view : Pages_sth.management_state =
       List.map
         (fun s ->
           {
-            Pages_sth.section_id =
-              string_of_int (Manage.section_option_id s);
+            Pages_sth.section_id = string_of_int (Manage.section_option_id s);
             section_name = Manage.section_option_name s;
           })
         (Manage.view_section_options view);
@@ -304,12 +303,16 @@ let load_launch_shell request ~user_id ~canonical_slug ~can_manage
       match%lwt Community_store.get_community_by_slug db canonical_slug with
       | Ok (Some community) ->
           let%lwt channels =
-            match%lwt Channel_store.get_channels_by_community db community.id with
+            match%lwt
+              Channel_store.get_channels_by_community db community.id
+            with
             | Ok channels -> Lwt.return channels
             | Error _ -> Lwt.return []
           in
           let%lwt sections =
-            match%lwt Section_store.get_sections_by_community db community.id with
+            match%lwt
+              Section_store.get_sections_by_community db community.id
+            with
             | Ok sections -> Lwt.return sections
             | Error _ -> Lwt.return []
           in
@@ -319,8 +322,9 @@ let load_launch_shell request ~user_id ~canonical_slug ~can_manage
             | Error _ -> Lwt.return []
           in
           let sidebar =
-            Community_pages.launch_knowledge_sidebar ~community ~channels ~sections
-              ~settings_active ~show_visibility_note:false ~can_manage ()
+            Community_pages.launch_knowledge_sidebar ~community ~channels
+              ~sections ~settings_active ~show_visibility_note:false ~can_manage
+              ()
           in
           Lwt.return (Some (community, rail_communities, sidebar))
       | Ok None | Error _ -> Lwt.return None)
@@ -392,7 +396,8 @@ let respond_share request ~user_id ~community_slug ~post_id ~notice ~feedback
       let%lwt shell =
         load_launch_shell request ~user_id
           ~canonical_slug:(Share.view_origin_community_slug view)
-          ~can_manage:(Share.view_origin_manager view) ~settings_active:false
+          ~can_manage:(Share.view_origin_manager view)
+          ~settings_active:false
       in
       Dream.respond ~status ~headers:page_headers
         (Pages_sth.share_page ?user:(session_user request) ~request ?shell
@@ -427,9 +432,12 @@ let share_request_result request ~user_id ~community_slug ~post_id ~view =
                    ^ "/share")
                  ~query:[ ("done", [ "requested" ]) ]
                  ())))
-  | Error Store.Active_placement_exists -> respond Pages_sth.Already_shared `Conflict
-  | Error Store.Invalid_request_note -> respond Pages_sth.Note_invalid `Bad_Request
-  | Error Store.Origin_ineligible -> respond Pages_sth.Source_ineligible `Conflict
+  | Error Store.Active_placement_exists ->
+      respond Pages_sth.Already_shared `Conflict
+  | Error Store.Invalid_request_note ->
+      respond Pages_sth.Note_invalid `Bad_Request
+  | Error Store.Origin_ineligible ->
+      respond Pages_sth.Source_ineligible `Conflict
   | Error
       ( Store.Same_community | Store.Community_unavailable
       | Store.No_accepted_connection | Store.Destination_ineligible ) ->
@@ -538,8 +546,7 @@ let respond_management request ~user_id ~community_slug ~notice ~feedback
           ~can_manage:true ~settings_active:true
       in
       Dream.respond ~status ~headers:page_headers
-        (Pages_sth.management_page ?user:(session_user request) ~request
-           ?shell
+        (Pages_sth.management_page ?user:(session_user request) ~request ?shell
            ~state:(management_state_of_view view)
            ~notice ~feedback ()))
 
@@ -550,7 +557,8 @@ let make_management_page_handler request =
           (* Informational: no locks, no state change; the only carried
              state is the closed ?done= notice a completed mutation left. *)
           respond_management request ~user_id ~community_slug
-            ~notice:(management_notice request) ~feedback:None ~status:`OK))
+            ~notice:(management_notice request)
+            ~feedback:None ~status:`OK))
 
 (* --- Shared mutation entry for the manager-gated mutations ---
 
@@ -671,8 +679,8 @@ let make_review_handler ~accept request =
             in
             match (decision, accept, fields) with
             | None, true, _ ->
-                respond_management request ~user_id ~community_slug
-                  ~notice:None ~feedback:(Some Pages_sth.Section_invalid)
+                respond_management request ~user_id ~community_slug ~notice:None
+                  ~feedback:(Some Pages_sth.Section_invalid)
                   ~status:`Bad_Request
             | None, false, _ -> bad_request_page request
             | Some _, false, _ :: _ ->
@@ -700,8 +708,7 @@ let make_reject_handler request = make_review_handler ~accept:false request
    management page for a manager, Share page for a sharer, and a generic
    conflict page for a requester who since lost both. *)
 
-let withdraw_refused request ~user_id ~community_slug ~grant ~feedback ~status
-    =
+let withdraw_refused request ~user_id ~community_slug ~grant ~feedback ~status =
   let%lwt manager_view =
     Dream.sql request (fun db ->
         Manage.load_for_manager db ~user_id
@@ -722,22 +729,21 @@ let withdraw_refused request ~user_id ~community_slug ~grant ~feedback ~status
       in
       match share_view with
       | Ok (Some view)
-        when String.equal
-               (Share.view_origin_community_slug view)
-               community_slug ->
+        when String.equal (Share.view_origin_community_slug view) community_slug
+        ->
           respond_share request ~user_id ~community_slug ~post_id ~notice:None
             ~feedback:(Some feedback) ~status
       | Ok (Some _) | Ok None | Error _ ->
           (* A requester with no remaining surface still gets a truthful,
              payload-free answer. *)
           Dream.respond ~status ~headers:page_headers
-            (Site_pages.msg_page ?user:(session_user request) ~title:"Unavailable"
+            (Site_pages.msg_page ?user:(session_user request)
+               ~title:"Unavailable"
                ~message:
                  "That sharing request is no longer pending. Nothing was \
                   changed."
-               ~alert_type:"error"
-               ~return_url:("/c/" ^ community_slug)
-               request))
+               ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
+      )
 
 let make_withdrawal_handler request =
   with_session request (fun ~user_id ->
@@ -752,11 +758,10 @@ let make_withdrawal_handler request =
               match granted with
               | Ok None -> not_found_page request
               | Error
-                  ( Manage.Invalid_community_slug
-                  | Manage.Invalid_placement_id ) ->
+                  (Manage.Invalid_community_slug | Manage.Invalid_placement_id)
+                ->
                   not_found_page request
-              | Error Manage.Invalid_user_id ->
-                  server_error_page request
+              | Error Manage.Invalid_user_id -> server_error_page request
               | Error (Manage.Inconsistent_data | Manage.Storage_error) ->
                   server_error_page request
               | Ok (Some grant) -> (
@@ -790,8 +795,8 @@ let make_withdrawal_handler request =
                                    management_redirect ~community_slug
                                      ~outcome:"withdrawn")
                           | Error Store.Withdrawal_unavailable ->
-                              withdraw_refused request ~user_id
-                                ~community_slug ~grant
+                              withdraw_refused request ~user_id ~community_slug
+                                ~grant
                                 ~feedback:Pages_sth.Withdrawal_unavailable
                                 ~status:`Conflict
                           | Error _ -> server_error_page request))))))
@@ -808,8 +813,7 @@ let removal_result request ~user_id ~community_slug ~from_share ~subjects =
               manager's removal always returns to their own management
               page. *)
          then
-           share_redirect
-             ~origin_slug:community_slug
+           share_redirect ~origin_slug:community_slug
              ~post_id:(Manage.subjects_post_id subjects)
              ~outcome:"removed"
          else management_redirect ~community_slug ~outcome:"removed")
@@ -825,8 +829,7 @@ let make_removal_handler request =
           let community_id = Manage.view_community_id view in
           if
             Manage.subjects_origin_community_id subjects <> community_id
-            && Manage.subjects_destination_community_id subjects
-               <> community_id
+            && Manage.subjects_destination_community_id subjects <> community_id
           then
             (* The route community is not part of this placement: the id
                names someone else's record. *)
@@ -842,8 +845,7 @@ let make_removal_handler request =
                    origin. *)
                 let from_share =
                   from_share
-                  && Manage.subjects_origin_community_id subjects
-                     = community_id
+                  && Manage.subjects_origin_community_id subjects = community_id
                 in
                 let%lwt result =
                   Dream.sql request (fun db ->

@@ -43,7 +43,6 @@ let pending_signup_confirmation ~to_email ~token =
   { kind = Signup_confirmation; to_email; token }
 
 let password_reset ~to_email ~token = { kind = Password_reset; to_email; token }
-
 let recipient m = m.to_email
 
 (* A fixed category per kind: the only message detail a diagnostic may name. *)
@@ -75,41 +74,49 @@ let html_body m =
   let url = link m in
   match m.kind with
   | Verification ->
-      (Html.template {|<html><body>
+      Html.template
+        {|<html><body>
 <p>Welcome to Earde!</p>
 <p>Please verify your email address by clicking the link below:</p>
 <p><a href="%s">Verify my account</a></p>
 <p>Or copy this URL into your browser:<br>%s</p>
 <p>If you did not create an account, you can safely ignore this email.</p>
 </body></html>|}
-  [ Html.external_url url; Html.text url ])
+        [ Html.external_url url; Html.text url ]
   | Signup_confirmation ->
-      (Html.template {|<html><body>
+      Html.template
+        {|<html><body>
 <p>Welcome to Earde!</p>
 <p>Confirm your email address to finish creating your account:</p>
 <p><a href="%s">Confirm my account</a></p>
 <p>Or copy this URL into your browser:<br>%s</p>
 <p>This link expires in 24 hours. If you did not sign up, you can safely ignore this email.</p>
 </body></html>|}
-  [ Html.external_url url; Html.text url ])
+        [ Html.external_url url; Html.text url ]
   | Password_reset ->
-      (Html.template {|<html><body>
+      Html.template
+        {|<html><body>
 <p>You requested a password reset for your Earde account.</p>
 <p>Click the link below to set a new password. This link expires in 2 hours.</p>
 <p><a href="%s">Reset my password</a></p>
 <p>Or copy this URL into your browser:<br>%s</p>
 <p>If you did not request a password reset, you can safely ignore this email.</p>
 </body></html>|}
-  [ Html.external_url url; Html.text url ])
+        [ Html.external_url url; Html.text url ]
 
 let payload m =
   Yojson.Safe.to_string
     (`Assoc
-      [ ("sender", `Assoc [ ("name", `String "Earde"); ("email", `String "noreply@earde.com") ])
-      ; ("to", `List [ `Assoc [ ("email", `String m.to_email) ] ])
-      ; ("subject", `String (subject m))
-      ; ("htmlContent", `String (Html.to_string (html_body m)))
-      ])
+       [
+         ( "sender",
+           `Assoc
+             [
+               ("name", `String "Earde"); ("email", `String "noreply@earde.com");
+             ] );
+         ("to", `List [ `Assoc [ ("email", `String m.to_email) ] ]);
+         ("subject", `String (subject m));
+         ("htmlContent", `String (Html.to_string (html_body m)));
+       ])
 
 let dev_kind_name m =
   match m.kind with
@@ -127,7 +134,8 @@ let log_dev_token_url m =
         m.to_email (link m)
   | _ ->
       Dream.log
-        "BREVO_API_KEY not set — would send %s email to %s (set EARDE_LOG_TOKENS=1 to print link)"
+        "BREVO_API_KEY not set — would send %s email to %s (set \
+         EARDE_LOG_TOKENS=1 to print link)"
         (dev_kind_name m) m.to_email
 
 module Connection = Cohttp_lwt_unix.Connection
@@ -139,7 +147,9 @@ module Connection = Cohttp_lwt_unix.Connection
 let auth_mail_resolver : Cohttp_lwt_unix.Net.endp Auth_mail_resolver.t =
   Auth_mail_resolver.create ~permits:Auth_mail_resolver.default_permits
     ~resolve:(fun uri ->
-      Cohttp_lwt_unix.Net.resolve ~ctx:(Lazy.force Cohttp_lwt_unix.Net.default_ctx) uri)
+      Cohttp_lwt_unix.Net.resolve
+        ~ctx:(Lazy.force Cohttp_lwt_unix.Net.default_ctx)
+        uri)
 
 (* One POST on a connection this function owns, so that giving up on it
    really releases it. Cohttp's plain Client.post closes its connection only
@@ -170,15 +180,15 @@ let post_owned ~resolver ~endpoint ~api_key body_string =
   let release () =
     abandoned := true;
     (match !resolving with
-     | Some p ->
-         resolving := None;
-         Lwt.cancel p
-     | None -> ());
+    | Some p ->
+        resolving := None;
+        Lwt.cancel p
+    | None -> ());
     (match !connecting with
-     | Some p ->
-         connecting := None;
-         Lwt.cancel p
-     | None -> ());
+    | Some p ->
+        connecting := None;
+        Lwt.cancel p
+    | None -> ());
     match !connection with
     | Some c ->
         connection := None;
@@ -192,9 +202,10 @@ let post_owned ~resolver ~endpoint ~api_key body_string =
   Lwt.on_cancel result release;
   let headers =
     Cohttp.Header.of_list
-      [ ("api-key", api_key)
-      ; ("content-type", "application/json")
-      ; ("accept", "application/json")
+      [
+        ("api-key", api_key);
+        ("content-type", "application/json");
+        ("accept", "application/json");
       ]
   in
   Lwt.dont_wait
@@ -225,12 +236,16 @@ let post_owned ~resolver ~endpoint ~api_key body_string =
                 ~body:(Cohttp_lwt.Body.of_string body_string)
                 `POST endpoint
             in
-            let code = resp |> Cohttp.Response.status |> Cohttp.Code.code_of_status in
+            let code =
+              resp |> Cohttp.Response.status |> Cohttp.Code.code_of_status
+            in
             (* Drain the body but discard it: 4xx responses from upstreams
                sometimes echo request headers, and api-key in a log is the same
                blast radius as api-key in source. *)
             let%lwt () = Cohttp_lwt.Body.drain_body body in
-            finish (if code >= 200 && code < 300 then Ok () else Error (Printf.sprintf "http_%d" code));
+            finish
+              (if code >= 200 && code < 300 then Ok ()
+               else Error (Printf.sprintf "http_%d" code));
             Lwt.return_unit
           end)
     (fun _exn -> finish (Error "transport_error"));
@@ -245,5 +260,6 @@ let deliver m =
       log_dev_token_url m;
       Lwt.return (Ok ())
   | Some raw_key ->
-      deliver_via ~endpoint:(Uri.of_string brevo_api_url)
+      deliver_via
+        ~endpoint:(Uri.of_string brevo_api_url)
         ~api_key:(sanitize_api_key raw_key) m

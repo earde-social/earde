@@ -23,7 +23,6 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let or_fail = Db_fixture.or_fail
-
 let reject = Db_fixture.reject
 
 (* Projects go first (stewards and repositories cascade from them, and
@@ -32,134 +31,133 @@ let reject = Db_fixture.reject
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 941100001 AND 941100999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 941100001 AND 941100999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 941000001 AND 941000999)"
-    ; "DELETE FROM users WHERE username LIKE 'osproj_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 941000001 AND 941000999"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 941100001 \
+       AND 941100999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       941100001 AND 941100999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 941000001 AND 941000999)";
+      "DELETE FROM users WHERE username LIKE 'osproj_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       941000001 AND 941000999";
     ]
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 (* Isolated installation fixtures on purpose: existing drafts may
    independently RESTRICT-protect shared installations, which would
    contaminate the steward-restrict probes. *)
 let q_insert_installation =
   (Caqti_type.int64 ->! Caqti_type.int64)
-  "INSERT INTO github_installations
-     (github_installation_id, github_account_id, github_account_login,
-      github_account_type)
-   VALUES ($1, $1 + 100000, 'osproj-account', 'user')
-   RETURNING id"
+    "INSERT INTO github_installations\n\
+    \     (github_installation_id, github_account_id, github_account_login,\n\
+    \      github_account_type)\n\
+    \   VALUES ($1, $1 + 100000, 'osproj-account', 'user')\n\
+    \   RETURNING id"
 
 let q_insert_draft =
   (Caqti_type.(t2 int int64) ->! Caqti_type.int64)
-  "INSERT INTO project_onboarding_drafts
-     (user_id, github_installation_record_id, expires_at)
-   VALUES ($1, $2, NOW() + INTERVAL '24 hours') RETURNING id"
+    "INSERT INTO project_onboarding_drafts\n\
+    \     (user_id, github_installation_record_id, expires_at)\n\
+    \   VALUES ($1, $2, NOW() + INTERVAL '24 hours') RETURNING id"
 
 let q_absent_installation_record_id =
   (Caqti_type.unit ->! Caqti_type.int64)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM github_installations"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM github_installations"
 
 (* updated_at-ordering probe: everything else canonical. *)
 let q_insert_project_backdated =
   (Caqti_type.string ->! Caqti_type.int64)
-  "INSERT INTO open_source_projects
-     (name, slug, kind, forge_namespace_id, forge_namespace_login,
-      forge_namespace_type, updated_at)
-   VALUES ('Backdated', $1, 'project', 941100001, 'osproj-owner',
-           'user', NOW() - INTERVAL '10 seconds')
-   RETURNING id"
+    "INSERT INTO open_source_projects\n\
+    \     (name, slug, kind, forge_namespace_id, forge_namespace_login,\n\
+    \      forge_namespace_type, updated_at)\n\
+    \   VALUES ('Backdated', $1, 'project', 941100001, 'osproj-owner',\n\
+    \           'user', NOW() - INTERVAL '10 seconds')\n\
+    \   RETURNING id"
 
 (* Everything durable on one project row, in insert order, plus the
    timestamp-ordering flag. *)
 let q_project_row =
-  (Caqti_type.(int64 ->!
-      t2 (t2 (t2 (option int64) (option int)) (t2 string string))
-         (t2 (t2 (option string) (option string))
-             (t2 (t2 (t3 string string int64)
-                     (t3 string string string))
-                 bool))))
-  "SELECT source_onboarding_draft_id, created_by_user_id, name, slug,
-          description, website_url, kind, forge, forge_namespace_id,
-          forge_namespace_login, forge_namespace_type,
-          verification_status, updated_at >= created_at
-   FROM open_source_projects WHERE id = $1"
+  Caqti_type.(
+    int64
+    ->! t2
+          (t2 (t2 (option int64) (option int)) (t2 string string))
+          (t2
+             (t2 (option string) (option string))
+             (t2 (t2 (t3 string string int64) (t3 string string string)) bool)))
+    "SELECT source_onboarding_draft_id, created_by_user_id, name, slug,\n\
+    \          description, website_url, kind, forge, forge_namespace_id,\n\
+    \          forge_namespace_login, forge_namespace_type,\n\
+    \          verification_status, updated_at >= created_at\n\
+    \   FROM open_source_projects WHERE id = $1"
 
 let q_project_source =
   (Caqti_type.int64 ->! Caqti_type.(option int64))
-  "SELECT source_onboarding_draft_id FROM open_source_projects
-   WHERE id = $1"
+    "SELECT source_onboarding_draft_id FROM open_source_projects\n\
+    \   WHERE id = $1"
 
 let q_project_creator =
   (Caqti_type.int64 ->! Caqti_type.(option int))
-  "SELECT created_by_user_id FROM open_source_projects WHERE id = $1"
+    "SELECT created_by_user_id FROM open_source_projects WHERE id = $1"
 
 let q_steward_role =
   (Caqti_type.(t2 int64 int) ->! Caqti_type.string)
-  "SELECT role FROM project_stewards
-   WHERE project_id = $1 AND user_id = $2"
+    "SELECT role FROM project_stewards\n\
+    \   WHERE project_id = $1 AND user_id = $2"
 
 let q_count_stewards_for_project =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM project_stewards WHERE project_id = $1"
+    "SELECT COUNT(*) FROM project_stewards WHERE project_id = $1"
 
 (* One text signature per repository row, ordered by position — pins
    the exact stored metadata and the ordering in one comparison. *)
 let q_repo_signatures =
   (Caqti_type.int64 ->* Caqti_type.string)
-  "SELECT position::text || '|' || github_repository_id::text || '|' ||
-          full_name || '|' || html_url || '|' ||
-          COALESCE(description, '<null>') || '|' || default_branch
-          || '|' || is_primary::text || '|' || is_archived::text
-   FROM project_repositories WHERE project_id = $1 ORDER BY position"
+    "SELECT position::text || '|' || github_repository_id::text || '|' ||\n\
+    \          full_name || '|' || html_url || '|' ||\n\
+    \          COALESCE(description, '<null>') || '|' || default_branch\n\
+    \          || '|' || is_primary::text || '|' || is_archived::text\n\
+    \   FROM project_repositories WHERE project_id = $1 ORDER BY position"
 
 let q_count_repos_for_project =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM project_repositories WHERE project_id = $1"
+    "SELECT COUNT(*) FROM project_repositories WHERE project_id = $1"
 
 let q_delete_user =
-  (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM users WHERE id = $1"
+  (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
 
 let q_delete_installation =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM github_installations WHERE id = $1"
+    "DELETE FROM github_installations WHERE id = $1"
 
 let q_delete_draft =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM project_onboarding_drafts WHERE id = $1"
+    "DELETE FROM project_onboarding_drafts WHERE id = $1"
 
 let q_delete_project =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM open_source_projects WHERE id = $1"
+    "DELETE FROM open_source_projects WHERE id = $1"
 
 (* Schema audit scoped to exactly the three new tables. *)
 let q_credential_columns =
   (Caqti_type.unit ->* Caqti_type.string)
-  "SELECT table_name || '.' || column_name
-   FROM information_schema.columns
-   WHERE table_schema = 'public'
-     AND table_name IN ('open_source_projects', 'project_stewards',
-                        'project_repositories')
-     AND (column_name ~* 'token' OR column_name ~* 'secret'
-          OR column_name ~* 'verifier'
-          OR column_name ~* 'authorization_code'
-          OR column_name ~* 'oauth_code' OR column_name ~* 'raw_state'
-          OR column_name ~* 'session_binding'
-          OR column_name ~* 'private_key')"
+    "SELECT table_name || '.' || column_name\n\
+    \   FROM information_schema.columns\n\
+    \   WHERE table_schema = 'public'\n\
+    \     AND table_name IN ('open_source_projects', 'project_stewards',\n\
+    \                        'project_repositories')\n\
+    \     AND (column_name ~* 'token' OR column_name ~* 'secret'\n\
+    \          OR column_name ~* 'verifier'\n\
+    \          OR column_name ~* 'authorization_code'\n\
+    \          OR column_name ~* 'oauth_code' OR column_name ~* 'raw_state'\n\
+    \          OR column_name ~* 'session_binding'\n\
+    \          OR column_name ~* 'private_key')"
 
 (* Each case gets a fresh connection and a clean fixture slate; cleanup
    runs again afterwards even when an assertion fails mid-way. *)
@@ -183,8 +181,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let insert_user conn username =
   let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -203,30 +200,27 @@ let insert_draft_ok label conn ~user ~installation =
 
 (* Project-insert helper: canonical valid values, overridable per
    probe; the namespace id defaults into the reserved cleanup range. *)
-let insert_project ?source_draft ?creator ?(name = "Fixture Project")
-    ~slug ?description ?website ?(kind = "project") ?(forge = "github")
+let insert_project ?source_draft ?creator ?(name = "Fixture Project") ~slug
+    ?description ?website ?(kind = "project") ?(forge = "github")
     ?(namespace_id = 941100001L) ?(login = "osproj-owner")
     ?(namespace_type = "user") ?(status = "verified") conn =
   let (module C : Caqti_lwt.CONNECTION) = conn in
   C.find Project_fixture.q_insert_project
-    ( ((source_draft, creator), (name, slug))
-    , ( (description, website)
-      , ((kind, forge, namespace_id), (login, namespace_type, status)) )
-    )
+    ( ((source_draft, creator), (name, slug)),
+      ( (description, website),
+        ((kind, forge, namespace_id), (login, namespace_type, status)) ) )
 
-let insert_project_ok label ?source_draft ?creator ?name ~slug
-    ?description ?website ?kind ?forge ?namespace_id ?login
-    ?namespace_type ?status conn =
+let insert_project_ok label ?source_draft ?creator ?name ~slug ?description
+    ?website ?kind ?forge ?namespace_id ?login ?namespace_type ?status conn =
   let* r =
-    insert_project ?source_draft ?creator ?name ~slug ?description
-      ?website ?kind ?forge ?namespace_id ?login ?namespace_type ?status
-      conn
+    insert_project ?source_draft ?creator ?name ~slug ?description ?website
+      ?kind ?forge ?namespace_id ?login ?namespace_type ?status conn
   in
   or_fail label r
 
-let insert_repo ?(full_name = "osproj-owner/repo") ?html_url
-    ?description ?(branch = "main") ?(primary = false)
-    ?(archived = false) ~repo_id ~position conn project =
+let insert_repo ?(full_name = "osproj-owner/repo") ?html_url ?description
+    ?(branch = "main") ?(primary = false) ?(archived = false) ~repo_id ~position
+    conn project =
   let (module C : Caqti_lwt.CONNECTION) = conn in
   let html_url =
     match html_url with
@@ -234,15 +228,14 @@ let insert_repo ?(full_name = "osproj-owner/repo") ?html_url
     | None -> "https://github.com/" ^ full_name
   in
   C.find Project_fixture.q_insert_repo
-    ( ((project, position), repo_id)
-    , ((full_name, html_url, description), (branch, primary, archived))
-    )
+    ( ((project, position), repo_id),
+      ((full_name, html_url, description), (branch, primary, archived)) )
 
-let insert_repo_ok label ?full_name ?html_url ?description ?branch
-    ?primary ?archived ~repo_id ~position conn project =
+let insert_repo_ok label ?full_name ?html_url ?description ?branch ?primary
+    ?archived ~repo_id ~position conn project =
   let* r =
-    insert_repo ?full_name ?html_url ?description ?branch ?primary
-      ?archived ~repo_id ~position conn project
+    insert_repo ?full_name ?html_url ?description ?branch ?primary ?archived
+      ~repo_id ~position conn project
   in
   or_fail label r
 
@@ -263,31 +256,28 @@ let fresh_case =
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* uid = insert_user conn "osproj_a" in
       let* inst = insert_installation conn 941000001L in
-      let* draft =
-        insert_draft_ok "draft" conn ~user:uid ~installation:inst
-      in
+      let* draft = insert_draft_ok "draft" conn ~user:uid ~installation:inst in
       let* p =
         insert_project_ok "full project" ~source_draft:draft ~creator:uid
           ~name:"OCaml Platform" ~slug:"osproj-full"
-          ~description:"Descrizione — byte exact"
-          ~website:"https://ocaml.org" conn
+          ~description:"Descrizione — byte exact" ~website:"https://ocaml.org"
+          conn
       in
       let* row = C.find q_project_row p in
-      let* ( ((source, creator), (name, slug))
-           , ( (description, website)
-             , (((kind, forge, ns_id), (login, ns_type, status)),
-                updated_ge) ) ) =
+      let* ( ((source, creator), (name, slug)),
+             ( (description, website),
+               (((kind, forge, ns_id), (login, ns_type, status)), updated_ge) )
+           ) =
         or_fail "project row" row
       in
-      Alcotest.(check (option int64)) "source draft stored" (Some draft)
-        source;
+      Alcotest.(check (option int64)) "source draft stored" (Some draft) source;
       Alcotest.(check (option int)) "creator stored" (Some uid) creator;
       Alcotest.(check string) "name byte-exact" "OCaml Platform" name;
       Alcotest.(check string) "slug" "osproj-full" slug;
-      Alcotest.(check (option string)) "description byte-exact"
-        (Some "Descrizione — byte exact") description;
-      Alcotest.(check (option string)) "website"
-        (Some "https://ocaml.org") website;
+      Alcotest.(check (option string))
+        "description byte-exact" (Some "Descrizione — byte exact") description;
+      Alcotest.(check (option string))
+        "website" (Some "https://ocaml.org") website;
       Alcotest.(check string) "kind" "project" kind;
       Alcotest.(check string) "forge" "github" forge;
       Alcotest.(check int64) "namespace id" 941100001L ns_id;
@@ -302,11 +292,12 @@ let fresh_case =
           (fun (k, slug) ->
             let* _ = insert_project_ok ("kind " ^ k) ~kind:k ~slug conn in
             Lwt.return_unit)
-          [ ("organization", "osproj-kind-organization")
-          ; ("ecosystem", "osproj-kind-ecosystem")
-          ; ("foundation", "osproj-kind-foundation")
-          ; ("working_group", "osproj-kind-working-group")
-          ; ("other", "osproj-kind-other")
+          [
+            ("organization", "osproj-kind-organization");
+            ("ecosystem", "osproj-kind-ecosystem");
+            ("foundation", "osproj-kind-foundation");
+            ("working_group", "osproj-kind-working-group");
+            ("other", "osproj-kind-other");
           ]
       in
       let* _ =
@@ -328,12 +319,12 @@ let fresh_case =
       Alcotest.(check string) "role defaults to steward" "steward" role;
       let* _ =
         insert_repo_ok "repo 1" ~full_name:"osproj-owner/alpha"
-          ~description:"Prima" ~primary:true ~repo_id:941600001L
-          ~position:1 conn p
+          ~description:"Prima" ~primary:true ~repo_id:941600001L ~position:1
+          conn p
       in
       let* _ =
-        insert_repo_ok "repo 2" ~full_name:"osproj-owner/beta"
-          ~archived:true ~repo_id:941600002L ~position:2 conn p
+        insert_repo_ok "repo 2" ~full_name:"osproj-owner/beta" ~archived:true
+          ~repo_id:941600002L ~position:2 conn p
       in
       let* _ =
         insert_repo_ok "repo 3" ~full_name:"osproj-owner/gamma"
@@ -343,13 +334,10 @@ let fresh_case =
       let* sigs = or_fail "signatures" sigs in
       Alcotest.(check (list string))
         "repository metadata and order preserved exactly"
-        [ "1|941600001|osproj-owner/alpha|\
-           https://github.com/osproj-owner/alpha|Prima|main|true|false"
-        ; "2|941600002|osproj-owner/beta|\
-           https://github.com/osproj-owner/beta|<null>|main|false|true"
-        ; "3|941600003|osproj-owner/gamma|\
-           https://github.com/osproj-owner/gamma|<null>|release/v1|\
-           false|false"
+        [
+          "1|941600001|osproj-owner/alpha|https://github.com/osproj-owner/alpha|Prima|main|true|false";
+          "2|941600002|osproj-owner/beta|https://github.com/osproj-owner/beta|<null>|main|false|true";
+          "3|941600003|osproj-owner/gamma|https://github.com/osproj-owner/gamma|<null>|release/v1|false|false";
         ]
         sigs;
       Lwt.return_unit)
@@ -366,8 +354,7 @@ let slug_case =
           (fun slug ->
             let* _ = insert_project_ok ("slug " ^ slug) ~slug conn in
             Lwt.return_unit)
-          [ "ocaml"; "lwt"; "ocaml-platform"; "project2";
-            String.make 80 'a' ]
+          [ "ocaml"; "lwt"; "ocaml-platform"; "project2"; String.make 80 'a' ]
       in
       let probe label slug =
         let* r = insert_project ~slug conn in
@@ -397,20 +384,18 @@ let fields_case =
       in
       let* _ =
         insert_project_ok "2000-char description"
-          ~description:(String.make 2000 'd') ~slug:"osproj-desc-max"
-          conn
+          ~description:(String.make 2000 'd') ~slug:"osproj-desc-max" conn
       in
       let* _ =
         insert_project_ok "2048-char website"
           ~website:("https://" ^ String.make 2040 'w')
           ~slug:"osproj-web-max" conn
       in
-      let probe label ?name ?description ?website ?kind ?forge
-          ?namespace_id ?login ?namespace_type ?status () =
+      let probe label ?name ?description ?website ?kind ?forge ?namespace_id
+          ?login ?namespace_type ?status () =
         let* r =
-          insert_project ?name ?description ?website ?kind ?forge
-            ?namespace_id ?login ?namespace_type ?status
-            ~slug:"osproj-reject" conn
+          insert_project ?name ?description ?website ?kind ?forge ?namespace_id
+            ?login ?namespace_type ?status ~slug:"osproj-reject" conn
         in
         reject label r
       in
@@ -419,31 +404,25 @@ let fields_case =
       let* () = probe "trailing-space name" ~name:"Padded " () in
       let* () = probe "overlength name" ~name:(String.make 121 'n') () in
       let* () =
-        probe "overlength description"
-          ~description:(String.make 2001 'd') ()
+        probe "overlength description" ~description:(String.make 2001 'd') ()
       in
       let* () = probe "blank website" ~website:"" () in
-      let* () =
-        probe "trim-damaged website" ~website:" https://ocaml.org" ()
-      in
+      let* () = probe "trim-damaged website" ~website:" https://ocaml.org" () in
       let* () =
         probe "overlength website"
-          ~website:("https://" ^ String.make 2041 'w') ()
+          ~website:("https://" ^ String.make 2041 'w')
+          ()
       in
       let* () = probe "invalid kind" ~kind:"community" () in
       let* () = probe "invalid forge" ~forge:"gitlab" () in
       let* () = probe "namespace id zero" ~namespace_id:0L () in
-      let* () =
-        probe "namespace id negative" ~namespace_id:(-941100001L) ()
-      in
+      let* () = probe "namespace id negative" ~namespace_id:(-941100001L) () in
       let* () = probe "blank namespace login" ~login:"" () in
       let* () =
         probe "trim-damaged namespace login" ~login:" osproj-owner" ()
       in
       let* () = probe "invalid namespace type" ~namespace_type:"bot" () in
-      let* () =
-        probe "invalid verification status" ~status:"pending" ()
-      in
+      let* () = probe "invalid verification status" ~status:"pending" () in
       let* r = C.find q_insert_project_backdated "osproj-backdated" in
       reject "updated_at < created_at" r)
 
@@ -461,8 +440,8 @@ let source_draft_case =
       let* d1 = insert_draft_ok "draft 1" conn ~user:uid ~installation:i1 in
       let* d2 = insert_draft_ok "draft 2" conn ~user:uid ~installation:i2 in
       let* p1 =
-        insert_project_ok "from draft 1" ~source_draft:d1
-          ~slug:"osproj-src-1" conn
+        insert_project_ok "from draft 1" ~source_draft:d1 ~slug:"osproj-src-1"
+          conn
       in
       let* r = insert_project ~source_draft:d1 ~slug:"osproj-src-1b" conn in
       let* () = reject "second project from the same live draft" r in
@@ -478,8 +457,7 @@ let source_draft_case =
       let* () = or_fail "delete draft" r in
       let* source = C.find q_project_source p1 in
       let* source = or_fail "source after draft delete" source in
-      Alcotest.(check (option int64)) "source reference went NULL" None
-        source;
+      Alcotest.(check (option int64)) "source reference went NULL" None source;
       let* n = C.find Project_fixture.q_project_exists p1 in
       let* n = or_fail "project after draft delete" n in
       Alcotest.(check int) "project survives draft deletion" 1 n;
@@ -602,8 +580,8 @@ let repo_constraints_case =
       let* r = insert_repo ~repo_id:941600011L ~position:(-1) conn p1 in
       let* () = reject "position negative" r in
       let* _ =
-        insert_repo_ok "first" ~full_name:"osproj-owner/alpha"
-          ~primary:true ~repo_id:941600011L ~position:1 conn p1
+        insert_repo_ok "first" ~full_name:"osproj-owner/alpha" ~primary:true
+          ~repo_id:941600011L ~position:1 conn p1
       in
       let* _ =
         insert_repo_ok "second" ~full_name:"osproj-owner/beta"
@@ -626,13 +604,13 @@ let repo_constraints_case =
       let* () = reject "second primary in one project" r in
       let* _ =
         insert_repo_ok "other project's own primary"
-          ~full_name:"osproj-owner/delta" ~primary:true
-          ~repo_id:941600014L ~position:1 conn p2
+          ~full_name:"osproj-owner/delta" ~primary:true ~repo_id:941600014L
+          ~position:1 conn p2
       in
       let* r =
         insert_repo ~full_name:""
-          ~html_url:"https://github.com/osproj-owner/eps"
-          ~repo_id:941600015L ~position:3 conn p1
+          ~html_url:"https://github.com/osproj-owner/eps" ~repo_id:941600015L
+          ~position:3 conn p1
       in
       let* () = reject "empty full_name" r in
       let* r =
@@ -641,8 +619,8 @@ let repo_constraints_case =
       in
       let* () = reject "empty html_url" r in
       let* r =
-        insert_repo ~full_name:"osproj-owner/eps" ~branch:""
-          ~repo_id:941600015L ~position:3 conn p1
+        insert_repo ~full_name:"osproj-owner/eps" ~branch:"" ~repo_id:941600015L
+          ~position:3 conn p1
       in
       let* () = reject "empty default_branch" r in
       let* _ =
@@ -668,13 +646,12 @@ let global_claim_case =
       let* a = insert_user conn "osproj_a" in
       let* b = insert_user conn "osproj_b" in
       let* p1 =
-        insert_project_ok "project 1" ~creator:a ~slug:"osproj-claim-1"
-          conn
+        insert_project_ok "project 1" ~creator:a ~slug:"osproj-claim-1" conn
       in
       let* p2 =
-        insert_project_ok "project 2" ~creator:b
-          ~namespace_id:941100002L ~namespace_type:"organization"
-          ~login:"osproj-org" ~slug:"osproj-claim-2" conn
+        insert_project_ok "project 2" ~creator:b ~namespace_id:941100002L
+          ~namespace_type:"organization" ~login:"osproj-org"
+          ~slug:"osproj-claim-2" conn
       in
       let* _ =
         insert_repo_ok "first claim" ~full_name:"osproj-owner/alpha"
@@ -686,13 +663,13 @@ let global_claim_case =
       in
       let* () =
         reject
-          "same repository id in a second project (different full \
-           name, position, namespace, creator)" r
+          "same repository id in a second project (different full name, \
+           position, namespace, creator)"
+          r
       in
       let* _ =
         insert_repo_ok "different repository may reuse the position"
-          ~full_name:"osproj-org/beta" ~repo_id:941600022L ~position:1
-          conn p2
+          ~full_name:"osproj-org/beta" ~repo_id:941600022L ~position:1 conn p2
       in
       Lwt.return_unit)
 
@@ -702,8 +679,7 @@ let global_claim_case =
    kind-driven primary requirements), so the schema must admit the
    zero-repository shape rather than be weakened to test it. *)
 let zero_repos_case =
-  db_case "a zero-repository project is structurally legal"
-    (fun conn ->
+  db_case "a zero-repository project is structurally legal" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* p = insert_project_ok "bare project" ~slug:"osproj-bare" conn in
       let* n = C.find q_count_repos_for_project p in
@@ -728,28 +704,36 @@ let credential_columns_case =
             let* n = or_fail (table ^ " column count") n in
             Alcotest.(check int) (table ^ " column count") expected n;
             Lwt.return_unit)
-          [ ("open_source_projects", 15)
-          ; ("project_stewards", 6)
-          ; ("project_repositories", 13)
+          [
+            ("open_source_projects", 15);
+            ("project_stewards", 6);
+            ("project_repositories", 13);
           ]
       in
       let* offenders = C.collect_list q_credential_columns () in
       let* offenders = or_fail "credential-shaped columns" offenders in
-      Alcotest.(check (list string)) "no credential-shaped column" []
-        offenders;
+      Alcotest.(check (list string)) "no credential-shaped column" [] offenders;
       Lwt.return_unit)
 
 let suite =
-  [ fresh_case; slug_case; fields_case; source_draft_case; creator_case;
-    steward_case; repo_constraints_case; global_claim_case;
-    zero_repos_case; credential_columns_case ]
+  [
+    fresh_case;
+    slug_case;
+    fields_case;
+    source_draft_case;
+    creator_case;
+    steward_case;
+    repo_constraints_case;
+    global_claim_case;
+    zero_repos_case;
+    credential_columns_case;
+  ]
 
 let suites =
-    (* Verified-project domain schema: SQL-only slice, no store yet —
+  (* Verified-project domain schema: SQL-only slice, no store yet —
        provenance SET NULLs, steward cascades/restrict, closed
        vocabularies, slug canon, the global repository claim, one
        primary per project, and the credential-column audit live in
        Postgres; same EARDE_TEST_DATABASE_URL gate (each case skips
        without it). *)
-  [ ( "open_source_projects_schema", suite )
-  ]
+  [ ("open_source_projects_schema", suite) ]

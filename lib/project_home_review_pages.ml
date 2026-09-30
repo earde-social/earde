@@ -14,14 +14,8 @@ open Html.Infix
    so full verification and eligibility state is shown to the moderator,
    unlike the public/steward-facing channels. *)
 
-type project_verification =
-  | Verified
-  | Stale
-  | Revoked
-
-type host_eligibility =
-  | Eligible
-  | Currently_ineligible
+type project_verification = Verified | Stale | Revoked
+type host_eligibility = Eligible | Currently_ineligible
 
 type repository = {
   full_name : string;
@@ -47,10 +41,7 @@ type community = {
   host_eligibility : host_eligibility;
 }
 
-type state = {
-  community : community;
-  requests : pending_request list;
-}
+type state = { community : community; requests : pending_request list }
 
 type feedback =
   | Stale_form
@@ -72,7 +63,6 @@ type launch_shell = {
   rail_communities : Community_types.community list;
   sidebar : Html.t;
 }
-
 
 (* The same canonical grammar the route and read model require. A project
    slug outside it never reaches an action attribute. *)
@@ -122,8 +112,9 @@ let verification_copy = function
 
 let feedback_copy = function
   | Stale_form ->
-      Html.static "This page had been open too long, so the action could no longer be \
-       submitted. Nothing was changed. Try again."
+      Html.static
+        "This page had been open too long, so the action could no longer be \
+         submitted. Nothing was changed. Try again."
   | Review_unavailable -> Html.static "That request is no longer pending."
   | Project_unavailable ->
       Html.static "That project is no longer available for acceptance."
@@ -134,14 +125,14 @@ let feedback_copy = function
 let feedback_html = function
   | None -> Html.empty
   | Some feedback ->
-      (Html.template "<div class='phrv-alert'><p>%s</p></div>"
-  [ (feedback_copy feedback) ])
+      Html.template "<div class='phrv-alert'><p>%s</p></div>"
+        [ feedback_copy feedback ]
 
 let heading_html =
-  (Html.static "<div class='create-head'>\
-   <h1 class='create-title'>Project home requests</h1>\
-   <p class='create-sub phrv-intro'>Review projects requesting this \
-   community as their Earde home.</p></div>")
+  Html.static
+    "<div class='create-head'><h1 class='create-title'>Project home \
+     requests</h1><p class='create-sub phrv-intro'>Review projects requesting \
+     this community as their Earde home.</p></div>"
 
 (* One generic page-level notice; it never reveals whether the community is
    private, a draft, or legacy — only that acceptance is currently closed. *)
@@ -149,20 +140,21 @@ let ineligible_notice_html (community : community) =
   match community.host_eligibility with
   | Eligible -> Html.empty
   | Currently_ineligible ->
-      (Html.static "<div class='phrv-ineligible'><p>This community cannot currently \
-       accept project-home requests.</p></div>")
+      Html.static
+        "<div class='phrv-ineligible'><p>This community cannot currently \
+         accept project-home requests.</p></div>"
 
 (* Markers ride after the identity, never replacing it, so an archived or
    primary repository stays fully labelled. *)
 let repo_markers (r : repository) =
   let primary =
     if r.is_primary then
-      (Html.static " <span class='phrv-marker phrv-primary'>Primary</span>")
+      Html.static " <span class='phrv-marker phrv-primary'>Primary</span>"
     else Html.empty
   in
   let archived =
     if r.is_archived then
-      (Html.static " <span class='phrv-marker phrv-archived'>Archived</span>")
+      Html.static " <span class='phrv-marker phrv-archived'>Archived</span>"
     else Html.empty
   in
   primary ++ archived
@@ -170,73 +162,72 @@ let repo_markers (r : repository) =
 (* The full name always renders (escaped); it only becomes a link when the
    stored URL is a real http(s) target. *)
 let repo_identity_html (r : repository) =
-  let text = (Html.text (r.full_name)) in
+  let text = Html.text r.full_name in
   if http_url r.html_url then
-    (Html.template "<a href='%s' class='phrv-repo-link'>%s</a>"
-  [ (Html.external_url (r.html_url))
-  ; text ])
-  else (Html.template "<span class='phrv-repo-name'>%s</span>"
-  [ text ])
+    Html.template "<a href='%s' class='phrv-repo-link'>%s</a>"
+      [ Html.external_url r.html_url; text ]
+  else Html.template "<span class='phrv-repo-name'>%s</span>" [ text ]
 
 let repo_html (r : repository) =
-  (Html.template "<li class='phrv-repo'>%s%s</li>"
-  [ (repo_identity_html r)
-  ; (repo_markers r) ])
+  Html.template "<li class='phrv-repo'>%s%s</li>"
+    [ repo_identity_html r; repo_markers r ]
 
 let repositories_html = function
-  | [] -> (Html.static "<p class='phrv-no-repos'>No repositories.</p>")
+  | [] -> Html.static "<p class='phrv-no-repos'>No repositories.</p>"
   | repos ->
-      (Html.template "<ul class='phrv-repos'>%s</ul>"
-  [ ((Html.join (Html.static "\n")) (List.map repo_html repos)) ])
+      Html.template "<ul class='phrv-repos'>%s</ul>"
+        [ (Html.join (Html.static "\n")) (List.map repo_html repos) ]
 
 let requester_html = function
   | Some name ->
-      (Html.template "<p class='phrv-requester'>Requested by %s</p>"
-  [ (Html.text (name)) ])
-  | None -> (Html.static "<p class='phrv-requester'>Requested by Deleted user</p>")
+      Html.template "<p class='phrv-requester'>Requested by %s</p>"
+        [ Html.text name ]
+  | None ->
+      Html.static "<p class='phrv-requester'>Requested by Deleted user</p>"
 
 (* Private workflow text: labelled as private, HTML-escaped, and never
    parsed as Markdown or HTML. *)
 let note_html = function
   | None -> Html.empty
   | Some note ->
-      (Html.template "<div class='phrv-note'>\
-         <p class='phrv-note-label'>Private request note — visible only to \
-         this community&#39;s moderators and administrators.</p>\
-         <p class='phrv-note-body'>%s</p></div>"
-  [ (Html.text (note)) ])
+      Html.template
+        "<div class='phrv-note'><p class='phrv-note-label'>Private request \
+         note — visible only to this community&#39;s moderators and \
+         administrators.</p><p class='phrv-note-body'>%s</p></div>"
+        [ Html.text note ]
 
 let identity_html (req : pending_request) =
-  (Html.template "<div class='phrv-identity'>\
-     <h2 class='phrv-project-name'>%s</h2>\
-     <p class='phrv-project-kind'>%s</p>\
-     <p class='phrv-namespace'>%s</p>\
-     <p class='phrv-verification'>%s</p>\
-     <p class='phrv-connected'>Project connected through GitHub</p>\
-     </div>"
-  [ (Html.text (req.project_name))
-  ; (kind_copy req.project_kind)
-  ; (Html.text (req.namespace_login))
-  ; (verification_copy req.verification) ])
+  Html.template
+    "<div class='phrv-identity'><h2 class='phrv-project-name'>%s</h2><p \
+     class='phrv-project-kind'>%s</p><p class='phrv-namespace'>%s</p><p \
+     class='phrv-verification'>%s</p><p class='phrv-connected'>Project \
+     connected through GitHub</p></div>"
+    [
+      Html.text req.project_name;
+      kind_copy req.project_kind;
+      Html.text req.namespace_login;
+      verification_copy req.verification;
+    ]
 
 (* Both slugs are validated before an action path is built, so escaping here
    is defense-in-depth on values already known canonical. *)
 let action_path ~community_slug ~project_slug ~verb =
-  (Html.text ((Printf.sprintf "/c/%s/projects/%s/%s" community_slug project_slug verb)))
+  Html.text
+    (Printf.sprintf "/c/%s/projects/%s/%s" community_slug project_slug verb)
 
 (* One form: the route path carries both identities, so no application field
    and no hidden identifier exist; the submit control is nameless. Dream's
    framework CSRF field is emitted only when a live request is supplied. *)
 let review_form ?request ~action ~cls ~label () =
   let csrf_field =
-    match request with None -> Html.empty | Some request -> Csrf_field.tag request
+    match request with
+    | None -> Html.empty
+    | Some request -> Csrf_field.tag request
   in
-  (Html.template "<form method='POST' action='%s' class='phrv-review-form %s'>%s\
-     <button type='submit' class='phrv-btn'>%s</button></form>"
-  [ action
-  ; cls
-  ; csrf_field
-  ; label ])
+  Html.template
+    "<form method='POST' action='%s' class='phrv-review-form %s'>%s<button \
+     type='submit' class='phrv-btn'>%s</button></form>"
+    [ action; cls; csrf_field; label ]
 
 (* Acceptance requires a verified project, an eligible community, and at
    least one repository; anything else leaves rejection available but shows
@@ -246,38 +237,43 @@ let accept_available ~(community : community) ~(req : pending_request) =
   && community.host_eligibility = Eligible
   && req.repositories <> []
 
-let actions_html ?request ~(community : community) ~(req : pending_request) ()
-    =
+let actions_html ?request ~(community : community) ~(req : pending_request) () =
   let accept =
     if accept_available ~community ~req then
       review_form ?request
         ~action:
           (action_path ~community_slug:community.slug
              ~project_slug:req.project_slug ~verb:"accept")
-        ~cls:(Html.static "phrv-accept") ~label:(Html.static "Accept as community home") ()
+        ~cls:(Html.static "phrv-accept")
+        ~label:(Html.static "Accept as community home")
+        ()
     else
-      (Html.static "<p class='phrv-accept-unavailable'>Acceptance is unavailable for this \
-       request.</p>")
+      Html.static
+        "<p class='phrv-accept-unavailable'>Acceptance is unavailable for this \
+         request.</p>"
   in
   let reject =
     review_form ?request
       ~action:
         (action_path ~community_slug:community.slug
            ~project_slug:req.project_slug ~verb:"reject")
-      ~cls:(Html.static "phrv-reject") ~label:(Html.static "Reject request") ()
+      ~cls:(Html.static "phrv-reject")
+      ~label:(Html.static "Reject request")
+      ()
   in
-  (Html.template "<div class='phrv-actions'>%s%s</div>"
-  [ accept
-  ; reject ])
+  Html.template "<div class='phrv-actions'>%s%s</div>" [ accept; reject ]
 
 let request_html ?request ~(community : community) ~actionable
     (req : pending_request) =
-  (Html.template "<li class='phrv-request'>%s%s%s%s%s</li>"
-  [ (identity_html req)
-  ; (repositories_html req.repositories)
-  ; (requester_html req.requester_name)
-  ; (note_html req.request_note)
-  ; (if actionable then actions_html ?request ~community ~req () else Html.empty) ])
+  Html.template "<li class='phrv-request'>%s%s%s%s%s</li>"
+    [
+      identity_html req;
+      repositories_html req.repositories;
+      requester_html req.requester_name;
+      note_html req.request_note;
+      (if actionable then actions_html ?request ~community ~req ()
+       else Html.empty);
+    ]
 
 (* Actionability is decided per request: the community slug must be
    addressable, the project slug canonical, and this the first occurrence of
@@ -300,26 +296,26 @@ let requests_html ?request ~(community : community) requests =
 let body_html ?request ~(state : state) () =
   let requests_section =
     match state.requests with
-    | [] -> (Html.static "<p class='phrv-empty'>No pending project requests.</p>")
+    | [] -> Html.static "<p class='phrv-empty'>No pending project requests.</p>"
     | requests ->
-        (Html.template "<ul class='phrv-request-list'>%s</ul>"
-  [ (requests_html ?request ~community:state.community requests) ])
+        Html.template "<ul class='phrv-request-list'>%s</ul>"
+          [ requests_html ?request ~community:state.community requests ]
   in
   Html.concat
     [ heading_html; ineligible_notice_html state.community; requests_section ]
 
 let project_home_review_page ?user ?request ?shell ~state ~feedback () =
   let body =
-    (Html.template "<div class='create-wrap project-home-review'><div \
+    Html.template
+      "<div class='create-wrap project-home-review'><div \
        class='create-panel'>%s%s</div></div>"
-  [ (feedback_html feedback)
-  ; (body_html ?request ~state ()) ])
+      [ feedback_html feedback; body_html ?request ~state () ]
   in
   match shell with
   | None ->
       (* noindex: a moderator-only workflow surface — not for search
          indexes. *)
-      (* Degraded document (pass 19): [shell] is None only when the durable
+      (* Degraded document: [shell] is None only when the durable
          community record could not be re-read for launch chrome AFTER the
          read model already authorized this reviewer (a mid-request deletion
          race or a storage failure in the decorative load). Without a
@@ -333,8 +329,8 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
          legacy top bar, which this document intentionally has none of. *)
       Page_shell.launch_message_page ?request ~noindex:true
         ~title:"Project home requests"
-        ~content:(Html.template "<div class='create-shell'>%s</div>"
-  [ body ]) ()
+        ~content:(Html.template "<div class='create-shell'>%s</div>" [ body ])
+        ()
   | Some shell ->
       (* Cartographic Civic conversion: only the outer document changes.
          The queue panel renders inside the shared community-settings shell
@@ -343,8 +339,7 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
          SQL, so the full permitted nav is honest); everything inside the
          panel is the exact body above. *)
       let content =
-        Community_settings_shell.wrap
-          ~slug:shell.community_record.slug
+        Community_settings_shell.wrap ~slug:shell.community_record.slug
           ~active:Community_settings_shell.Home_requests
           ~can_complete_setup:
             (Community_settings_shell.can_complete_setup
@@ -354,6 +349,5 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
       Community_shell.launch_community_page ?user ?request ~noindex:true
         ~rail_communities:shell.rail_communities
         ~community:shell.community_record ~sidebar:shell.sidebar
-        ~page_class:"launch-project-home-review"
-        ~title:"Project home requests"
+        ~page_class:"launch-project-home-review" ~title:"Project home requests"
         ~content ()

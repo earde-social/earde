@@ -102,8 +102,7 @@ let valid_network_description = function
         (c < '\x20' && c <> '\n' && c <> '\t') || c = '\x7f'
       in
       let is_edge c = c = ' ' || c = '\t' || c = '\n' in
-      n > 0
-      && String.is_valid_utf_8 text
+      n > 0 && String.is_valid_utf_8 text
       && (not (String.exists is_forbidden text))
       && (not (is_edge text.[0]))
       && (not (is_edge text.[n - 1]))
@@ -129,19 +128,16 @@ let positive id = Int64.compare id 0L > 0
 let candidate_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->* Caqti_type.(t3 int bool string))
-  "SELECT id, is_network_community, onboarding_state \
-   FROM communities WHERE slug = $1"
+    "SELECT id, is_network_community, onboarding_state FROM communities WHERE \
+     slug = $1"
 
 let candidate_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* Caqti_type.(t2 (t2 int64 int64) (t2 bool bool)))
-  "SELECT id, project_id, \
-          requested_by_user_id IS NULL AND reviewed_by_user_id IS NULL \
-            AND request_note IS NULL, \
-          reviewed_at IS NOT NULL AND removed_at IS NULL \
-   FROM community_projects \
-   WHERE community_id = $1 AND relation_type = 'home' \
-     AND status = 'accepted'"
+    "SELECT id, project_id, requested_by_user_id IS NULL AND \
+     reviewed_by_user_id IS NULL AND request_note IS NULL, reviewed_at IS NOT \
+     NULL AND removed_at IS NULL FROM community_projects WHERE community_id = \
+     $1 AND relation_type = 'home' AND status = 'accepted'"
 
 (* Step 1: the permanent project, locked first — the lock every sibling
    home operation takes before anything else, making the project row the
@@ -151,10 +147,8 @@ let candidate_relation_query =
 let lock_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->? Caqti_type.(t2 int64 string))
-  "SELECT p.id, p.verification_status \
-   FROM open_source_projects p \
-   WHERE p.id = $1 \
-   FOR UPDATE OF p"
+    "SELECT p.id, p.verification_status FROM open_source_projects p WHERE p.id \
+     = $1 FOR UPDATE OF p"
 
 (* Every durable column of the locked project as one text signature, so
    the pre-commit validation can prove the project row byte-unchanged.
@@ -162,17 +156,14 @@ let lock_project_query =
 let project_sig_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT id::text || '|' || \
-          COALESCE(source_onboarding_draft_id::text, '<null>') || '|' || \
-          name || '|' || slug || '|' || \
-          COALESCE(description, '<null>') || '|' || \
-          COALESCE(website_url, '<null>') || '|' || \
-          kind || '|' || forge || '|' || forge_namespace_id::text || '|' || \
-          forge_namespace_login || '|' || forge_namespace_type || '|' || \
-          verification_status || '|' || \
-          COALESCE(created_by_user_id::text, '<null>') || '|' || \
-          created_at::text || '|' || updated_at::text \
-   FROM open_source_projects WHERE id = $1"
+    "SELECT id::text || '|' || COALESCE(source_onboarding_draft_id::text, \
+     '<null>') || '|' || name || '|' || slug || '|' || COALESCE(description, \
+     '<null>') || '|' || COALESCE(website_url, '<null>') || '|' || kind || '|' \
+     || forge || '|' || forge_namespace_id::text || '|' || \
+     forge_namespace_login || '|' || forge_namespace_type || '|' || \
+     verification_status || '|' || COALESCE(created_by_user_id::text, \
+     '<null>') || '|' || created_at::text || '|' || updated_at::text FROM \
+     open_source_projects WHERE id = $1"
 
 (* Step 2: the exact community, locked second under the held project
    lock, by candidate id and the supplied current slug together — a
@@ -183,15 +174,13 @@ let project_sig_query =
 let lock_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int string)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string (option string)))
-           (t2 (t2 string string) (t3 bool bool bool))))
-  "SELECT id, name, slug, description, visibility, onboarding_state, \
-          is_network_community, indexable, discoverable \
-   FROM communities \
-   WHERE id = $1 AND slug = $2 \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int string) (t2 string (option string)))
+          (t2 (t2 string string) (t3 bool bool bool))))
+    "SELECT id, name, slug, description, visibility, onboarding_state, \
+     is_network_community, indexable, discoverable FROM communities WHERE id = \
+     $1 AND slug = $2 FOR UPDATE"
 
 (* Steps 3a/3b: both durable authorization sources, always queried and
    locked in this order and always in full, so a concurrent role removal
@@ -202,9 +191,8 @@ let lock_community_query =
 let lock_top_moderator_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.string)
-  "SELECT role FROM community_moderators \
-   WHERE user_id = $1 AND community_id = $2 AND role = 'top_mod' \
-   FOR UPDATE"
+    "SELECT role FROM community_moderators WHERE user_id = $1 AND community_id \
+     = $2 AND role = 'top_mod' FOR UPDATE"
 
 (* ...then the durable global administrator flag on the users row — the
    only durable representation of Earde administrators. A session-only
@@ -212,9 +200,7 @@ let lock_top_moderator_query =
 let lock_admin_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.bool)
-  "SELECT is_admin FROM users \
-   WHERE id = $1 AND is_admin \
-   FOR UPDATE"
+    "SELECT is_admin FROM users WHERE id = $1 AND is_admin FOR UPDATE"
 
 (* Step 4: the exact accepted relation, locked last. The partial unique
    active-home index caps this at one row for the locked project; every
@@ -224,36 +210,30 @@ let lock_admin_query =
 let lock_accepted_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 string) (t2 string (option string)))
-           (t2
-              (t2 (option int) (option int))
-              (t2 (t2 bool bool) (t2 bool bool)))))
-  "SELECT id, relation_type, status, request_note, \
-          requested_by_user_id, reviewed_by_user_id, \
-          reviewed_at IS NOT NULL, removed_at IS NULL, \
-          COALESCE(reviewed_at >= created_at, FALSE), \
-          updated_at >= created_at \
-   FROM community_projects \
-   WHERE project_id = $1 AND community_id = $2 \
-     AND relation_type = 'home' AND status = 'accepted' \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 string) (t2 string (option string)))
+          (t2 (t2 (option int) (option int)) (t2 (t2 bool bool) (t2 bool bool))))
+  )
+    "SELECT id, relation_type, status, request_note, requested_by_user_id, \
+     reviewed_by_user_id, reviewed_at IS NOT NULL, removed_at IS NULL, \
+     COALESCE(reviewed_at >= created_at, FALSE), updated_at >= created_at FROM \
+     community_projects WHERE project_id = $1 AND community_id = $2 AND \
+     relation_type = 'home' AND status = 'accepted' FOR UPDATE"
 
 (* Every durable column of the locked relation as one text signature, for
    the byte-unchanged pre-commit proof. *)
 let relation_sig_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT id::text || '|' || project_id::text || '|' || \
-          community_id::text || '|' || relation_type || '|' || status \
-          || '|' || COALESCE(requested_by_user_id::text, '<null>') \
-          || '|' || COALESCE(reviewed_by_user_id::text, '<null>') \
-          || '|' || COALESCE(request_note, '<null>') \
-          || '|' || created_at::text || '|' || updated_at::text \
-          || '|' || COALESCE(reviewed_at::text, '<null>') \
-          || '|' || COALESCE(removed_at::text, '<null>') \
-   FROM community_projects WHERE id = $1"
+    "SELECT id::text || '|' || project_id::text || '|' || community_id::text \
+     || '|' || relation_type || '|' || status || '|' || \
+     COALESCE(requested_by_user_id::text, '<null>') || '|' || \
+     COALESCE(reviewed_by_user_id::text, '<null>') || '|' || \
+     COALESCE(request_note, '<null>') || '|' || created_at::text || '|' || \
+     updated_at::text || '|' || COALESCE(reviewed_at::text, '<null>') || '|' \
+     || COALESCE(removed_at::text, '<null>') FROM community_projects WHERE id \
+     = $1"
 
 (* Step 5 and the pre-commit re-read share one bounded aggregate: the
    complete draft shell (membership, moderation, the canonical General
@@ -267,42 +247,31 @@ let relation_sig_query =
 let draft_state_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int64)
-   ->! Caqti_type.(
-         t2
-           (t2 (t4 int int int int) (t4 int int int int))
-           (t2 (t3 int int int) (t3 int int int))))
-  "SELECT \
-     (SELECT COUNT(*) FROM community_members WHERE community_id = $1), \
+  ->! Caqti_type.(
+        t2
+          (t2 (t4 int int int int) (t4 int int int int))
+          (t2 (t3 int int int) (t3 int int int))))
+    "SELECT (SELECT COUNT(*) FROM community_members WHERE community_id = $1), \
      (SELECT COUNT(*) FROM community_moderators WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM community_moderators \
-      WHERE community_id = $1 AND role = 'top_mod'), \
-     (SELECT COUNT(*) FROM community_sections WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM community_sections \
-      WHERE community_id = $1 AND slug = 'general' AND name = 'General' \
-        AND position = 0 AND default_sort = 'new' \
-        AND NOT is_introduction_section), \
-     (SELECT COUNT(*) FROM channels WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM channels \
-      WHERE community_id = $1 AND slug = 'general' AND name = 'general' \
-        AND position = 0 AND NOT is_archived), \
-     (SELECT COUNT(*) FROM community_projects \
-      WHERE community_id = $1 AND relation_type = 'home' \
-        AND status = 'accepted'), \
-     (SELECT COUNT(*) FROM community_projects \
-      WHERE community_id = $1 AND relation_type = 'home' \
-        AND status = 'pending'), \
-     (SELECT COUNT(*) FROM community_projects \
-      WHERE project_id = $2 AND relation_type = 'home' \
-        AND status IN ('pending', 'accepted')), \
-     (SELECT COUNT(*) FROM community_projects \
-      WHERE project_id = $2 AND relation_type = 'home' \
-        AND status = 'pending'), \
-     (SELECT COUNT(*) FROM posts WHERE community_id = $1), \
-     (SELECT COUNT(*) FROM comments \
-      WHERE post_id IN (SELECT id FROM posts WHERE community_id = $1)), \
-     (SELECT COUNT(*) FROM chat_messages \
-      WHERE channel_id IN \
-        (SELECT id FROM channels WHERE community_id = $1))"
+     (SELECT COUNT(*) FROM community_moderators WHERE community_id = $1 AND \
+     role = 'top_mod'), (SELECT COUNT(*) FROM community_sections WHERE \
+     community_id = $1), (SELECT COUNT(*) FROM community_sections WHERE \
+     community_id = $1 AND slug = 'general' AND name = 'General' AND position \
+     = 0 AND default_sort = 'new' AND NOT is_introduction_section), (SELECT \
+     COUNT(*) FROM channels WHERE community_id = $1), (SELECT COUNT(*) FROM \
+     channels WHERE community_id = $1 AND slug = 'general' AND name = \
+     'general' AND position = 0 AND NOT is_archived), (SELECT COUNT(*) FROM \
+     community_projects WHERE community_id = $1 AND relation_type = 'home' AND \
+     status = 'accepted'), (SELECT COUNT(*) FROM community_projects WHERE \
+     community_id = $1 AND relation_type = 'home' AND status = 'pending'), \
+     (SELECT COUNT(*) FROM community_projects WHERE project_id = $2 AND \
+     relation_type = 'home' AND status IN ('pending', 'accepted')), (SELECT \
+     COUNT(*) FROM community_projects WHERE project_id = $2 AND relation_type \
+     = 'home' AND status = 'pending'), (SELECT COUNT(*) FROM posts WHERE \
+     community_id = $1), (SELECT COUNT(*) FROM comments WHERE post_id IN \
+     (SELECT id FROM posts WHERE community_id = $1)), (SELECT COUNT(*) FROM \
+     chat_messages WHERE channel_id IN (SELECT id FROM channels WHERE \
+     community_id = $1))"
 
 (* The slug-conflict boundary. PostgreSQL aborts the whole transaction on
    a unique violation unless a savepoint fences the failing statement, so
@@ -314,8 +283,7 @@ let savepoint_query =
 
 let rollback_savepoint_query =
   let open Caqti_request.Infix in
-  (Caqti_type.unit ->. Caqti_type.unit)
-  "ROLLBACK TO SAVEPOINT ncps_publication"
+  (Caqti_type.unit ->. Caqti_type.unit) "ROLLBACK TO SAVEPOINT ncps_publication"
 
 (* Step 7: the one mutation. Identity and lifecycle are written together
    in a single statement guarded on the exact locked draft state, so no
@@ -325,26 +293,19 @@ let rollback_savepoint_query =
 let publish_update_query =
   let open Caqti_request.Infix in
   (Caqti_type.(
-     t3
-       (t3 int string string)
+     t3 (t3 int string string)
        (t3 (option string) string string)
        (t3 bool bool string))
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string (option string)))
-           (t2 (t2 string string) (t3 bool bool bool))))
-  "UPDATE communities \
-   SET name = $2, slug = $3, description = $4, \
-       visibility = $5, onboarding_state = $6, \
-       indexable = $7, discoverable = $8 \
-   WHERE id = $1 AND slug = $9 \
-     AND is_network_community \
-     AND onboarding_state = 'draft' \
-     AND visibility = 'private' \
-     AND NOT indexable \
-     AND NOT discoverable \
-   RETURNING id, name, slug, description, visibility, onboarding_state, \
-             is_network_community, indexable, discoverable"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int string) (t2 string (option string)))
+          (t2 (t2 string string) (t3 bool bool bool))))
+    "UPDATE communities SET name = $2, slug = $3, description = $4, visibility \
+     = $5, onboarding_state = $6, indexable = $7, discoverable = $8 WHERE id = \
+     $1 AND slug = $9 AND is_network_community AND onboarding_state = 'draft' \
+     AND visibility = 'private' AND NOT indexable AND NOT discoverable \
+     RETURNING id, name, slug, description, visibility, onboarding_state, \
+     is_network_community, indexable, discoverable"
 
 (* The post-rollback probe: does some other row own the requested final
    slug? Read committed gives this statement a fresh snapshot, so a
@@ -353,7 +314,7 @@ let publish_update_query =
 let slug_owner_probe_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int) ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM communities WHERE slug = $1 AND id <> $2"
+    "SELECT COUNT(*) FROM communities WHERE slug = $1 AND id <> $2"
 
 (* Step 9: slug-level uniqueness and the exact published lifecycle, as
    bounded counts — exactly one community owns the final slug, none
@@ -362,16 +323,12 @@ let slug_owner_probe_query =
 let post_slug_state_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 string string) (t3 int bool bool))
-   ->! Caqti_type.(t3 int int int))
-  "SELECT \
-     (SELECT COUNT(*) FROM communities WHERE slug = $1), \
-     (SELECT COUNT(*) FROM communities WHERE slug = $2), \
-     (SELECT COUNT(*) FROM communities \
-      WHERE id = $3 AND slug = $1 \
-        AND is_network_community \
-        AND onboarding_state = 'published' \
-        AND visibility = 'public' \
-        AND indexable = $4 AND discoverable = $5)"
+  ->! Caqti_type.(t3 int int int))
+    "SELECT (SELECT COUNT(*) FROM communities WHERE slug = $1), (SELECT \
+     COUNT(*) FROM communities WHERE slug = $2), (SELECT COUNT(*) FROM \
+     communities WHERE id = $3 AND slug = $1 AND is_network_community AND \
+     onboarding_state = 'published' AND visibility = 'public' AND indexable = \
+     $4 AND discoverable = $5)"
 
 let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
     ~current_community_slug ~publication =
@@ -422,8 +379,7 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
       && String.equal stored_name final_name
       && String.equal stored_slug final_slug
       && Option.equal String.equal stored_description final_description
-      && network
-      && indexable = new_indexable
+      && network && indexable = new_indexable
       && discoverable = new_discoverable
       &&
       match
@@ -451,40 +407,38 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
         if String.equal final_slug current_community_slug then 1 else 0
       in
       C.find post_slug_state_query
-        ((final_slug, current_community_slug),
-         (community_id, new_indexable, new_discoverable))
+        ( (final_slug, current_community_slug),
+          (community_id, new_indexable, new_discoverable) )
       >>= function
       | Error _ -> rollback_to Storage_error
-      | Ok (final_count, old_count, published_exact) ->
+      | Ok (final_count, old_count, published_exact) -> (
           if
             not
               (final_count = 1
               && old_count = expected_old_count
               && published_exact = 1)
           then rollback_to Inconsistent_data
-          else (
+          else
             C.find draft_state_query (community_id, project_id) >>= function
             | Error _ -> rollback_to Storage_error
-            | Ok after ->
+            | Ok after -> (
                 if after <> before then rollback_to Inconsistent_data
-                else (
+                else
                   C.find project_sig_query project_id >>= function
                   | Error _ -> rollback_to Storage_error
-                  | Ok project_sig_after ->
-                      if
-                        not
-                          (String.equal project_sig_before project_sig_after)
+                  | Ok project_sig_after -> (
+                      if not (String.equal project_sig_before project_sig_after)
                       then rollback_to Inconsistent_data
-                      else (
+                      else
                         C.find relation_sig_query relation_id >>= function
                         | Error _ -> rollback_to Storage_error
-                        | Ok relation_sig_after ->
+                        | Ok relation_sig_after -> (
                             if
                               not
                                 (String.equal relation_sig_before
                                    relation_sig_after)
                             then rollback_to Inconsistent_data
-                            else (
+                            else
                               (* The audit event rides the same
                                  transaction: inserted only after the
                                  complete post-update validation, so a
@@ -497,26 +451,23 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                               Project_home_audit.insert
                                 (module C)
                                 ~action:
-                                  Project_home_audit
-                                  .Network_community_published
+                                  Project_home_audit.Network_community_published
                                 ~actor_user_id ~project_id ~community_id
                                 ~relation_id
                               >>= function
-                              | Error Project_home_audit.Inconsistent_data
-                                ->
+                              | Error Project_home_audit.Inconsistent_data ->
                                   rollback_to Inconsistent_data
                               | Error Project_home_audit.Storage_error ->
                                   rollback_to Storage_error
                               | Ok () -> (
                                   C.commit () >>= function
-                                  | Error _ ->
-                                      Lwt.return (Error Storage_error)
+                                  | Error _ -> Lwt.return (Error Storage_error)
                                   | Ok () ->
                                       Lwt.return
                                         (Ok
-                                           { slug = final_slug;
-                                             visibility =
-                                               selected_visibility
+                                           {
+                                             slug = final_slug;
+                                             visibility = selected_visibility;
                                            }))))))
     in
 
@@ -545,13 +496,14 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
             ( (community_id, final_name, final_slug),
               ( final_description,
                 Community_types.community_visibility_to_string new_visibility,
-                Community_types.string_of_community_onboarding_state new_onboarding ),
+                Community_types.string_of_community_onboarding_state
+                  new_onboarding ),
               (new_indexable, new_discoverable, current_community_slug) )
           >>= function
-          | Error err ->
+          | Error err -> (
               if not (update_error_is_unique_violation err) then
                 rollback_to Storage_error
-              else (
+              else
                 C.exec rollback_savepoint_query () >>= function
                 | Error _ -> rollback_to Storage_error
                 | Ok () -> (
@@ -575,13 +527,12 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
               if
                 not
                   (published_row_ok ~community_id ~new_visibility
-                     ~new_onboarding ~new_indexable ~new_discoverable
-                     returned)
+                     ~new_onboarding ~new_indexable ~new_discoverable returned)
               then rollback_to Inconsistent_data
               else
                 validate_after_update ~community_id ~project_id ~relation_id
-                  ~new_indexable ~new_discoverable ~before
-                  ~project_sig_before ~relation_sig_before)
+                  ~new_indexable ~new_discoverable ~before ~project_sig_before
+                  ~relation_sig_before)
     in
 
     (* Step 6: the pure domain owns the resulting lifecycle. The draft
@@ -590,15 +541,16 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
     let publish_transition ~community_id ~project_id ~relation_id
         ~onboarding_state ~before ~project_sig_before ~relation_sig_before =
       match
-        Network_communities.publish ~is_network_community:true
-          ~onboarding_state mode
+        Network_communities.publish ~is_network_community:true ~onboarding_state
+          mode
       with
       | Error _ -> rollback_to Inconsistent_data
       | Ok
-          { Network_communities.visibility = new_visibility;
+          {
+            Network_communities.visibility = new_visibility;
             indexable = new_indexable;
             discoverable = new_discoverable;
-            onboarding_state = new_onboarding
+            onboarding_state = new_onboarding;
           } ->
           run_update ~community_id ~project_id ~relation_id ~new_visibility
             ~new_onboarding ~new_indexable ~new_discoverable ~before
@@ -611,8 +563,8 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
        canonical General section and active general channel, exactly one
        accepted home relation and no pending one on either side. The full
        tuple doubles as the pre-commit unchanged snapshot. *)
-    let validate_draft ~community_id ~project_id ~relation_id
-        ~onboarding_state ~project_sig_before ~relation_sig_before =
+    let validate_draft ~community_id ~project_id ~relation_id ~onboarding_state
+        ~project_sig_before ~relation_sig_before =
       C.find draft_state_query (community_id, project_id) >>= function
       | Error _ -> rollback_to Storage_error
       | Ok before ->
@@ -636,8 +588,7 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
           then rollback_to Inconsistent_data
           else
             publish_transition ~community_id ~project_id ~relation_id
-              ~onboarding_state ~before ~project_sig_before
-              ~relation_sig_before
+              ~onboarding_state ~before ~project_sig_before ~relation_sig_before
     in
 
     (* Step 4: the exact provisioned relation, locked last of all. The
@@ -656,16 +607,18 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
           rollback_to Draft_unavailable
       | Ok
           (Some
-            ( ((relation_id, relation_type), (status_raw, stored_note)),
-              ( (requested_by, reviewed_by),
-                ((has_reviewed_at, removed_at_null), (reviewed_ge, updated_ge))
-              ) )) ->
+             ( ((relation_id, relation_type), (status_raw, stored_note)),
+               ( (requested_by, reviewed_by),
+                 ((has_reviewed_at, removed_at_null), (reviewed_ge, updated_ge))
+               ) )) -> (
           if not (Int64.equal relation_id candidate_relation_id) then
             (* The candidate relation vanished and another took its place
                through a concurrent durable change. *)
             rollback_to Draft_unavailable
           else
-            let provisioned = Project_home_relation.create_provisioned_home () in
+            let provisioned =
+              Project_home_relation.create_provisioned_home ()
+            in
             let provisioned_status = Project_home_relation.status provisioned in
             let row_shape_ok =
               positive relation_id
@@ -676,12 +629,11 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                    (Project_home_relation.string_of_status provisioned_status)
               && Project_home_relation.status_of_string status_raw
                  = Some Project_home_relation.Accepted
-              && requested_by = None && reviewed_by = None
-              && stored_note = None && has_reviewed_at && removed_at_null
-              && reviewed_ge && updated_ge
+              && requested_by = None && reviewed_by = None && stored_note = None
+              && has_reviewed_at && removed_at_null && reviewed_ge && updated_ge
             in
             if not row_shape_ok then rollback_to Inconsistent_data
-            else (
+            else
               C.find relation_sig_query relation_id >>= function
               | Error _ -> rollback_to Storage_error
               | Ok relation_sig_before ->
@@ -700,7 +652,7 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
       C.find_opt lock_top_moderator_query (actor_user_id, community_id)
       >>= function
       | Error _ -> rollback_to Storage_error
-      | Ok moderator_row ->
+      | Ok moderator_row -> (
           if
             not
               (match moderator_row with
@@ -716,7 +668,7 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                 else
                   let admin_ok = admin_row = Some true in
                   if top_mod_ok || admin_ok then k ()
-                  else rollback_to Draft_unavailable
+                  else rollback_to Draft_unavailable)
     in
 
     (* Step 2: the exact community, under the held project lock. Missing,
@@ -733,12 +685,13 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
       | Ok None -> rollback_to Draft_unavailable
       | Ok
           (Some
-            ( ((community_id, stored_name), (stored_slug, stored_description)),
-              ( (visibility_raw, onboarding_raw),
-                (is_network, indexable, discoverable) ) )) -> (
+             ( ((community_id, stored_name), (stored_slug, stored_description)),
+               ( (visibility_raw, onboarding_raw),
+                 (is_network, indexable, discoverable) ) )) -> (
           match
             ( Community_types.community_visibility_of_string visibility_raw,
-              Community_types.community_onboarding_state_of_string onboarding_raw )
+              Community_types.community_onboarding_state_of_string
+                onboarding_raw )
           with
           | None, _ | _, Error _ -> rollback_to Inconsistent_data
           | Some visibility, Ok onboarding_state ->
@@ -786,12 +739,15 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
       C.find_opt lock_project_query candidate_project_id >>= function
       | Error _ -> rollback_to Storage_error
       | Ok None -> rollback_to Draft_unavailable
-      | Ok (Some (project_id, stored_verification)) ->
-          if not (positive project_id && Int64.equal project_id candidate_project_id)
+      | Ok (Some (project_id, stored_verification)) -> (
+          if
+            not
+              (positive project_id
+              && Int64.equal project_id candidate_project_id)
           then rollback_to Inconsistent_data
           else if not (known_verification_status stored_verification) then
             rollback_to Inconsistent_data
-          else (
+          else
             C.find project_sig_query project_id >>= function
             | Error _ -> rollback_to Storage_error
             | Ok project_sig_before ->
@@ -812,8 +768,7 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
           (* communities_slug_key admits one row per slug; two is durable
              corruption. *)
           rollback_to Inconsistent_data
-      | Ok [ (candidate_community_id, candidate_network, onboarding_raw) ]
-        ->
+      | Ok [ (candidate_community_id, candidate_network, onboarding_raw) ] -> (
           if candidate_community_id <= 0 then rollback_to Inconsistent_data
           else if not candidate_network then
             (* A legacy community is outside this lifecycle; it typically
@@ -821,8 +776,11 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                here, before the relation lookup could misread its absence
                as corruption. *)
             rollback_to Draft_unavailable
-          else (
-            match Community_types.community_onboarding_state_of_string onboarding_raw with
+          else
+            match
+              Community_types.community_onboarding_state_of_string
+                onboarding_raw
+            with
             | Error _ -> rollback_to Inconsistent_data
             | Ok Community_types.Community_published ->
                 (* Already published — including a published community
@@ -830,9 +788,8 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                    which a zero-relation candidate would otherwise read as
                    corruption. *)
                 rollback_to Draft_unavailable
-            | Ok Community_types.Community_draft -> resolve_candidate_relation
-                                         ~candidate_community_id)
-
+            | Ok Community_types.Community_draft ->
+                resolve_candidate_relation ~candidate_community_id)
     and resolve_candidate_relation ~candidate_community_id =
       C.collect_list candidate_relation_query candidate_community_id
       >>= function
@@ -843,8 +800,9 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
           rollback_to Inconsistent_data
       | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data
       | Ok
-          [ ( (candidate_relation_id, candidate_project_id),
-              (provenance_null, lifecycle_ok) )
+          [
+            ( (candidate_relation_id, candidate_project_id),
+              (provenance_null, lifecycle_ok) );
           ] ->
           if
             not
@@ -855,13 +813,15 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
           else
             lock_project ~candidate_project_id ~candidate_community_id
               ~candidate_relation_id
-              (fun ~relation_id ~onboarding_state ~project_sig_before
-                   ~relation_sig_before ->
-                validate_draft
-                  ~community_id:candidate_community_id
+              (fun
+                ~relation_id
+                ~onboarding_state
+                ~project_sig_before
+                ~relation_sig_before
+              ->
+                validate_draft ~community_id:candidate_community_id
                   ~project_id:candidate_project_id ~relation_id
-                  ~onboarding_state ~project_sig_before
-                  ~relation_sig_before)
+                  ~onboarding_state ~project_sig_before ~relation_sig_before)
     in
 
     C.start () >>= function

@@ -22,56 +22,33 @@ module Pi = Earde.Project_identity
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Hd = Earde.Project_home_provisioning_handlers
-
 module Pgs = Earde.Project_home_provisioning_pages
-
 module Rvs = Earde.Project_home_review_store
 
 let case = Case.quick
-
 let counting_loader = Http_fixture.counting_loader
-
 let ok_loader = Http_fixture.ok_loader
-
 let status_of = Http_fixture.status_of
-
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let insert_community = Community_fixture.insert_community
-
 let make_project = Home_provisioning_fixture.make_project
-
 let add_steward = Home_provisioning_fixture.add_steward
-
 let add_top_mod = Home_provisioning_fixture.add_top_mod
-
 let request_pending = Home_provisioning_fixture.request_pending
-
 let review = Home_provisioning_fixture.review
 
 (* The one POST pattern this slice registers, and the GET it completes. *)
 let get_pattern = "/projects/:slug/community-home/new"
-
 let post_pattern = "/projects/:slug/community-home"
-
 let get_target slug = Printf.sprintf "/projects/%s/community-home/new" slug
-
 let post_target slug = Printf.sprintf "/projects/%s/community-home" slug
-
 let request_home_target slug = Printf.sprintf "/projects/%s/request-home" slug
-
 let settings_target slug = Printf.sprintf "/c/%s/settings" slug
-
 let community_target slug = Printf.sprintf "/c/%s" slug
-
 let make_get ~mode = Hd.make_project_home_provisioning_page_handler ~mode
 
 let make ~mode ~load_config =
@@ -80,9 +57,10 @@ let make ~mode ~load_config =
 (* Exactly the three application fields, in the page's own order. *)
 let fields ?(name = "Phvv Community Home") ?(slug = "phvv-home")
     ?(description = "") () =
-  [ ("community_name", name);
+  [
+    ("community_name", name);
     ("community_slug", slug);
-    ("community_description", description)
+    ("community_description", description);
   ]
 
 (* ============ DB-free: the route shape ============ *)
@@ -93,9 +71,10 @@ let fields ?(name = "Phvv Community Home") ?(slug = "phvv-home")
    redirect, with no configuration read and no SQL. *)
 let two_route_router () =
   Dream.router
-    [ Dream.get get_pattern (fun req -> make_get ~mode:Ob.Off req);
+    [
+      Dream.get get_pattern (fun req -> make_get ~mode:Ob.Off req);
       Dream.post post_pattern (fun req ->
-          make ~mode:Ob.Off ~load_config:(fun () -> ok_loader ()) req)
+          make ~mode:Ob.Off ~load_config:(fun () -> ok_loader ()) req);
     ]
 
 let route_run ~method_ ~target =
@@ -103,33 +82,40 @@ let route_run ~method_ ~target =
     (Http_fixture.gate_run ~method_ ~target (two_route_router ()))
 
 let route_cases =
-  [ case "provisioning route: the registered POST pattern is exactly the \
-          action the creation page emits" (fun () ->
+  [
+    case
+      "provisioning route: the registered POST pattern is exactly the action \
+       the creation page emits" (fun () ->
         let html =
           Pgs.project_home_provisioning_page
             ~project:
-              { Pgs.name = "Phvv Project";
+              {
+                Pgs.name = "Phvv Project";
                 slug = "phvv-alpha";
                 description = None;
                 kind = Pi.Project;
-                namespace_login = "phvv-owner"
+                namespace_login = "phvv-owner";
               }
             ~values:
-              { Pgs.community_name = "";
+              {
+                Pgs.community_name = "";
                 community_slug = "";
-                community_description = ""
+                community_description = "";
               }
             ~feedback:None ()
         in
-        Alcotest.(check bool) "the page posts to the registered route" true
+        Alcotest.(check bool)
+          "the page posts to the registered route" true
           (Html_assert.contains html
              (Printf.sprintf "action='%s'" (post_target "phvv-alpha")));
         (* Scoped to the feature fragment: the shared shell owns its own
            chrome forms. *)
-        Alcotest.(check int) "exactly one form" 1
-          (Html_assert.occurrences (Html_assert.panel_fragment html) "<form"))
-  ; case "provisioning route: the POST target resolves once, with no alias \
-          and no extra GET" (fun () ->
+        Alcotest.(check int)
+          "exactly one form" 1
+          (Html_assert.occurrences (Html_assert.panel_fragment html) "<form"));
+    case
+      "provisioning route: the POST target resolves once, with no alias and no \
+       extra GET" (fun () ->
         Http_fixture.check_clean_redirect "post dispatches" "/bring"
           (route_run ~method_:`POST ~target:(post_target "phvv-alpha"));
         Http_fixture.check_clean_redirect "get dispatches" "/bring"
@@ -137,24 +123,23 @@ let route_cases =
         List.iter
           (fun (label, method_, target) ->
             Alcotest.(check int)
-              (label ^ ": unrouted")
-              404
+              (label ^ ": unrouted") 404
               (status_of (route_run ~method_ ~target)))
-          [ ("GET on the POST path", `GET, post_target "phvv-alpha");
+          [
+            ("GET on the POST path", `GET, post_target "phvv-alpha");
             ("POST on the GET path", `POST, get_target "phvv-alpha");
             ("trailing slash", `POST, post_target "phvv-alpha" ^ "/");
             ("sub-path", `POST, post_target "phvv-alpha" ^ "/create");
             ("plural alias", `POST, "/projects/phvv-alpha/community-homes");
-            ("legacy alias", `POST, "/projects/phvv-alpha/home")
-          ])
+            ("legacy alias", `POST, "/projects/phvv-alpha/home");
+          ]);
   ]
 
 (* ======== DB-free: shared rollout and authentication gates ======== *)
 
 let post_run ?session ?(headers = []) ~mode ~load_config () =
   Http_fixture.gate_run ?session ~headers ~method_:`POST
-    ~target:(post_target "phvv-any")
-    (make ~mode ~load_config)
+    ~target:(post_target "phvv-any") (make ~mode ~load_config)
 
 let routed_post ?session ?(headers = []) ?(mode = Ob.Public) ~load_config () =
   Http_fixture.gate_run ?session ~headers ~method_:`POST
@@ -163,8 +148,10 @@ let routed_post ?session ?(headers = []) ?(mode = Ob.Public) ~load_config () =
        [ Dream.post post_pattern (fun req -> make ~mode ~load_config req) ])
 
 let gate_cases =
-  [ case "POST provisioning off: clean /bring redirect before any route \
-          read, configuration load, or SQL" (fun () ->
+  [
+    case
+      "POST provisioning off: clean /bring redirect before any route read, \
+       configuration load, or SQL" (fun () ->
         let loader, calls = counting_loader (ok_loader ()) in
         Http_fixture.check_clean_redirect "off" "/bring"
           (Http_fixture.gate_response "off"
@@ -174,12 +161,14 @@ let gate_cases =
           (Http_fixture.gate_response "off routed"
              (routed_post ~session:Http_fixture.admin_session ~mode:Ob.Off
                 ~load_config:loader ()));
-        Alcotest.(check int) "loader never called" 0 !calls)
-  ; case "POST provisioning: anonymous and malformed sessions to /login, \
-          loader untouched" (fun () ->
+        Alcotest.(check int) "loader never called" 0 !calls);
+    case
+      "POST provisioning: anonymous and malformed sessions to /login, loader \
+       untouched" (fun () ->
         let loader, calls = counting_loader (ok_loader ()) in
         Http_fixture.check_clean_redirect "anonymous" "/login"
-          (Http_fixture.gate_response "anonymous" (routed_post ~load_config:loader ()));
+          (Http_fixture.gate_response "anonymous"
+             (routed_post ~load_config:loader ()));
         List.iter
           (fun raw ->
             Http_fixture.check_clean_redirect ("user_id " ^ raw) "/login"
@@ -194,18 +183,19 @@ let gate_cases =
              (routed_post
                 ~session:[ ("is_admin", "true") ]
                 ~mode:Ob.Admins ~load_config:loader ()));
-        Alcotest.(check int) "loader never called" 0 !calls)
-  ; case "POST provisioning admins mode: a non-admin is redirected before \
-          the configuration load" (fun () ->
+        Alcotest.(check int) "loader never called" 0 !calls);
+    case
+      "POST provisioning admins mode: a non-admin is redirected before the \
+       configuration load" (fun () ->
         let loader, calls = counting_loader (ok_loader ()) in
         Http_fixture.check_clean_redirect "non-admin" "/bring"
           (Http_fixture.gate_response "non-admin"
              (routed_post ~session:Http_fixture.logged_in ~mode:Ob.Admins
                 ~load_config:loader ()));
-        Alcotest.(check int) "loader never called" 0 !calls)
-  ; case "POST provisioning: authorized sessions continue past the gates, \
-          and an unrouted request is the generic 404 before configuration"
-      (fun () ->
+        Alcotest.(check int) "loader never called" 0 !calls);
+    case
+      "POST provisioning: authorized sessions continue past the gates, and an \
+       unrouted request is the generic 404 before configuration" (fun () ->
         (* Routerless: past the gates the missing route parameter is the
            next rejection, so reaching that defensive 404 proves the gates
            passed with no configuration read and no SQL (no sql_pool is
@@ -216,11 +206,11 @@ let gate_cases =
             Http_fixture.gate_response label
               (post_run ~session ~mode ~load_config:loader ())
           in
-          Alcotest.(check int) (label ^ ": defensive 404") 404
-            (status_of response);
+          Alcotest.(check int)
+            (label ^ ": defensive 404")
+            404 (status_of response);
           Alcotest.(check (option string))
-            (label ^ ": no-store")
-            (Some "no-store")
+            (label ^ ": no-store") (Some "no-store")
             (Dream.header response "Cache-Control");
           Alcotest.(check int) (label ^ ": loader untouched") 0 !calls
         in
@@ -230,47 +220,60 @@ let gate_cases =
         (* Routed and authorized with a good configuration and origin: the
            next rejection is the missing content type, proving the whole
            prefix ran and still no SQL happened. *)
-        Alcotest.(check int) "routed: 400 content type" 400
+        Alcotest.(check int)
+          "routed: 400 content type" 400
           (status_of
              (Http_fixture.gate_response "routed"
                 (routed_post ~session:Http_fixture.logged_in
                    ~headers:[ ("Origin", "https://earde.com") ]
                    ~load_config:(fun () -> ok_loader ())
-                   ()))))
+                   ()))));
   ]
 
 (* ============ DB-free: configuration and origin ============ *)
 
 let config_origin_cases =
-  [ case "POST provisioning: a configuration failure is a generic 503 that \
-          names nothing" (fun () ->
-        let loader, calls = counting_loader (Github_fixture.gac_of_values ~origin:None ()) in
+  [
+    case
+      "POST provisioning: a configuration failure is a generic 503 that names \
+       nothing" (fun () ->
+        let loader, calls =
+          counting_loader (Github_fixture.gac_of_values ~origin:None ())
+        in
         let response =
           Http_fixture.gate_response "config failure"
             (routed_post ~session:Http_fixture.logged_in
                ~headers:
-                 [ ("Origin", "https://earde.com");
-                   ("Content-Type", "application/x-www-form-urlencoded")
+                 [
+                   ("Origin", "https://earde.com");
+                   ("Content-Type", "application/x-www-form-urlencoded");
                  ]
                ~load_config:loader ())
         in
         Alcotest.(check int) "503" 503 (status_of response);
         Alcotest.(check int) "loader called once" 1 !calls;
-        Alcotest.(check (option string)) "no-store" (Some "no-store")
+        Alcotest.(check (option string))
+          "no-store" (Some "no-store")
           (Dream.header response "Cache-Control");
-        Alcotest.(check (option string)) "referrer policy"
-          (Some Earde.Request_origin.referrer_policy)
+        Alcotest.(check (option string))
+          "referrer policy" (Some Earde.Request_origin.referrer_policy)
           (Dream.header response "Referrer-Policy");
         let body = Lwt_main.run (Dream.body response) in
         List.iter
           (fun needle ->
-            Alcotest.(check bool) ("no leak " ^ needle) false
+            Alcotest.(check bool)
+              ("no leak " ^ needle) false
               (Html_assert.contains body needle))
-          [ "EARDE_PUBLIC_ORIGIN"; "GITHUB_APP"; "Missing"; "Invalid";
-            "public_origin"
-          ])
-  ; case "POST provisioning origin gate: the exact same-origin policy, \
-          before any form parse" (fun () ->
+          [
+            "EARDE_PUBLIC_ORIGIN";
+            "GITHUB_APP";
+            "Missing";
+            "Invalid";
+            "public_origin";
+          ]);
+    case
+      "POST provisioning origin gate: the exact same-origin policy, before any \
+       form parse" (fun () ->
         let origin_run label ?sec_fetch_site origin =
           let headers =
             (match origin with Some o -> [ ("Origin", o) ] | None -> [])
@@ -285,7 +288,8 @@ let config_origin_cases =
                ())
         in
         let rejected label ?sec_fetch_site origin =
-          Alcotest.(check int) (label ^ ": 403") 403
+          Alcotest.(check int)
+            (label ^ ": 403") 403
             (status_of (origin_run label ?sec_fetch_site origin))
         in
         (* Past the origin gate the missing content type is the next
@@ -310,14 +314,16 @@ let config_origin_cases =
         rejected "cross-site" ~sec_fetch_site:"cross-site" None;
         rejected "same-site metadata" ~sec_fetch_site:"same-site" None;
         let leak = origin_run "reflection" (Some "https://evil.example") in
-        Alcotest.(check bool) "origin never reflected" false
-          (Html_assert.contains (Lwt_main.run (Dream.body leak)) "evil.example"))
+        Alcotest.(check bool)
+          "origin never reflected" false
+          (Html_assert.contains (Lwt_main.run (Dream.body leak)) "evil.example"));
   ]
 
 (* ==================== DB-free: CSRF ==================== *)
 
 let csrf_pipeline () =
-  Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+  Dream.set_secret Github_fixture.cookie_secret
+  @@ Dream.memory_sessions
   @@ fun req ->
   let* () = Dream.set_session_field req "user_id" "42" in
   match Dream.method_ req with
@@ -326,8 +332,9 @@ let csrf_pipeline () =
         (Dream.csrf_token req ^ "\n" ^ Dream.csrf_token ~valid_for:(-60.) req)
   | _ ->
       Dream.router
-        [ Dream.post post_pattern (fun r ->
-              make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) r)
+        [
+          Dream.post post_pattern (fun r ->
+              make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) r);
         ]
         req
 
@@ -342,19 +349,22 @@ let csrf_post ?cookie ?(content_type = true) pipeline body_fields =
   match
     Lwt_main.run
       (pipeline
-         (Dream.request ~method_:`POST ~target:(post_target "phvv-any")
-            ~headers (Http_fixture.form_body body_fields)))
+         (Dream.request ~method_:`POST ~target:(post_target "phvv-any") ~headers
+            (Http_fixture.form_body body_fields)))
   with
   | response -> `Response response
   | exception _ -> `Db_boundary
 
 let csrf_rejected label expected result =
-  Alcotest.(check int) (label ^ ": status") expected
+  Alcotest.(check int)
+    (label ^ ": status") expected
     (status_of (Http_fixture.gate_response label result))
 
 let csrf_cases =
-  [ case "POST provisioning CSRF: Dream verification gates every \
-          submission; only a verified form reaches the database" (fun () ->
+  [
+    case
+      "POST provisioning CSRF: Dream verification gates every submission; only \
+       a verified form reaches the database" (fun () ->
         let pipeline = csrf_pipeline () in
         let cookie, fresh, expired = Http_fixture.mint_tokens "mint" pipeline in
         let valid = fields () in
@@ -367,8 +377,7 @@ let csrf_cases =
         Http_fixture.check_db_boundary "missing token re-renders"
           (csrf_post ~cookie pipeline valid);
         Http_fixture.check_db_boundary "invalid token re-renders"
-          (csrf_post ~cookie pipeline
-             (("dream.csrf", "not-a-token") :: valid));
+          (csrf_post ~cookie pipeline (("dream.csrf", "not-a-token") :: valid));
         Http_fixture.check_db_boundary "expired token re-renders"
           (csrf_post ~cookie pipeline (("dream.csrf", expired) :: valid));
         Http_fixture.check_db_boundary "duplicate tokens re-render"
@@ -389,9 +398,10 @@ let csrf_cases =
            CSRF passed, Dream stripped its own field, and the store call is
            the next thing to run. *)
         Http_fixture.check_db_boundary "verified form continues"
-          (csrf_post ~cookie pipeline (("dream.csrf", fresh) :: valid)))
-  ; case "POST provisioning CSRF: a verified token with an invalid form \
-          still re-authorizes through the database" (fun () ->
+          (csrf_post ~cookie pipeline (("dream.csrf", fresh) :: valid)));
+    case
+      "POST provisioning CSRF: a verified token with an invalid form still \
+       re-authorizes through the database" (fun () ->
         let pipeline = csrf_pipeline () in
         let cookie, fresh, _ = Http_fixture.mint_tokens "mint" pipeline in
         (* Every parser rejection re-renders the owner-authorized page,
@@ -402,12 +412,13 @@ let csrf_cases =
             Http_fixture.check_db_boundary label
               (csrf_post ~cookie pipeline
                  (("dream.csrf", fresh) :: body_fields)))
-          [ ("unknown field", ("phvv_unknown", "x") :: fields ());
+          [
+            ("unknown field", ("phvv_unknown", "x") :: fields ());
             ("blank name", fields ~name:"   " ());
             ("uppercase slug", fields ~slug:"Phvv-Home" ());
             ( "control byte in description",
-              fields ~description:"phvv\001body" () )
-          ])
+              fields ~description:"phvv\001body" () );
+          ]);
   ]
 
 (* ================= Database-gated integration ================= *)
@@ -415,55 +426,51 @@ let csrf_cases =
 (* Distinctive credential-shaped fixtures. None may appear in any page,
    redirect, header, or cookie this feature produces. *)
 let access_marker = "gho_PHVV_ACCESS_TOKEN_SECRET"
-
 let refresh_marker = "ghr_PHVV_REFRESH_TOKEN"
-
 let pkce_marker = "PHVV_PKCE_VERIFIER_VALUE"
-
 let state_marker = "PHVV_OAUTH_STATE_VALUE"
-
 let secret_marker = "PHVV_CLIENT_SECRET_VALUE"
 
 let credential_markers =
-  [ ("access token", access_marker);
+  [
+    ("access token", access_marker);
     ("refresh token", refresh_marker);
     ("PKCE verifier", pkce_marker);
     ("OAuth state", state_marker);
     ("client secret", secret_marker);
     ("external installation id", "951000001");
-    ("external account id", "951100001")
+    ("external account id", "951100001");
   ]
 
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 951100001 AND 951100999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 951100001 AND 951100999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 951000001 AND 951000999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'phvv-%'"
-    ; "DELETE FROM users WHERE username LIKE 'phvv_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 951000001 AND 951000999"
-    ; "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 951100001 \
+       AND 951100999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       951100001 AND 951100999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 951000001 AND 951000999)";
+      "DELETE FROM communities WHERE slug LIKE 'phvv-%'";
+      "DELETE FROM users WHERE username LIKE 'phvv_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       951000001 AND 951000999";
+      "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'";
     ]
 
 let q_count_by_slug = Home_provisioning_fixture.q_count_by_slug
 
 let q_count_like =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM communities WHERE slug LIKE $1"
+    "SELECT COUNT(*) FROM communities WHERE slug LIKE $1"
 
 let q_active_relations =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_projects \
-   WHERE project_id = $1 AND status IN ('pending', 'accepted')"
+    "SELECT COUNT(*) FROM community_projects WHERE project_id = $1 AND status \
+     IN ('pending', 'accepted')"
 
 let q_set_admin = Community_fixture.q_set_admin
 
@@ -477,15 +484,13 @@ let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let q_create_drift_fn =
   ddl
-    "CREATE FUNCTION phvv_drift_fn() RETURNS trigger \
-     LANGUAGE plpgsql \
-     AS 'BEGIN NEW.name := NEW.name || '' Drift''; RETURN NEW; END'"
+    "CREATE FUNCTION phvv_drift_fn() RETURNS trigger LANGUAGE plpgsql AS \
+     'BEGIN NEW.name := NEW.name || '' Drift''; RETURN NEW; END'"
 
 let q_create_drift_trigger =
   ddl
-    "CREATE TRIGGER phvv_drift BEFORE INSERT ON communities \
-     FOR EACH ROW WHEN (NEW.slug = 'phvv-drift-home') \
-     EXECUTE FUNCTION phvv_drift_fn()"
+    "CREATE TRIGGER phvv_drift BEFORE INSERT ON communities FOR EACH ROW WHEN \
+     (NEW.slug = 'phvv-drift-home') EXECUTE FUNCTION phvv_drift_fn()"
 
 let q_drop_drift_trigger =
   ddl "DROP TRIGGER IF EXISTS phvv_drift ON communities"
@@ -512,8 +517,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* === the real production pipeline shape ===
 
@@ -527,7 +531,6 @@ let db_case name f =
    sticky: a request that already carries a session keeps its own user, so
    independent cookies stay independent under concurrency. *)
 let shared_identity : (int * bool) option ref = ref None
-
 let shared_pipeline = ref None
 
 let identity_middleware handler request =
@@ -555,10 +558,12 @@ let allowing_limiter =
     ~cleanup:ignore
 
 let build_pipeline_with ~limit ~url =
-  Dream.sql_pool ~size:2 url @@ Dream.set_secret Github_fixture.cookie_secret
+  Dream.sql_pool ~size:2 url
+  @@ Dream.set_secret Github_fixture.cookie_secret
   @@ Dream.memory_sessions @@ identity_middleware
   @@ Dream.router
-       [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
+       [
+         Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
          (* The exact production failure this suite regresses: an
             authentic, correctly signed, same-session token whose one-hour
             lifetime ran out while the page sat open. *)
@@ -567,15 +572,13 @@ let build_pipeline_with ~limit ~url =
          Dream.get get_pattern (fun req -> make_get ~mode:Ob.Public req);
          Dream.post post_pattern
            (limit (fun req ->
-                make ~mode:Ob.Public
-                  ~load_config:(fun () -> ok_loader ())
-                  req));
+                make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) req));
          Dream.get "/projects/:slug/request-home" (fun req ->
              Earde.Project_home_request_handlers
              .make_project_home_choice_handler ~mode:Ob.Public req);
          Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
          Dream.get "/c/:slug/settings"
-           Earde.Community_settings_handlers.community_settings_handler
+           Earde.Community_settings_handlers.community_settings_handler;
        ]
 
 let build_pipeline ~url =
@@ -606,16 +609,15 @@ let do_get ?pipeline ?cookie ~url ~target () =
 (* [omit_token] posts a body with no framework CSRF field at all — exactly
    what a page rendered without one would send; [extra_headers] carries the
    rest of the real navigation metadata a browser attaches. *)
-let do_post ?pipeline ?(origin = Some "https://earde.com")
-    ?(extra_headers = []) ?(omit_token = false) ~url ~cookie ~target ~token
-    ~body_fields () =
+let do_post ?pipeline ?(origin = Some "https://earde.com") ?(extra_headers = [])
+    ?(omit_token = false) ~url ~cookie ~target ~token ~body_fields () =
   let pipeline =
     match pipeline with Some p -> p | None -> pipeline_for ~url
   in
   let headers =
     (match origin with Some o -> [ ("Origin", o) ] | None -> [])
-    @ [ ("Content-Type", "application/x-www-form-urlencoded");
-        ("Cookie", cookie)
+    @ [
+        ("Content-Type", "application/x-www-form-urlencoded"); ("Cookie", cookie);
       ]
     @ extra_headers
   in
@@ -624,7 +626,8 @@ let do_post ?pipeline ?(origin = Some "https://earde.com")
   in
   let* response =
     pipeline
-      (Dream.request ~method_:`POST ~target ~headers (Http_fixture.form_body fields))
+      (Dream.request ~method_:`POST ~target ~headers
+         (Http_fixture.form_body fields))
   in
   let* body = Dream.body response in
   Lwt.return (response, body)
@@ -652,62 +655,92 @@ let mint_expired_token label ~url ~cookie =
 let open_form label ~url ~slug uid =
   as_user uid;
   let* response, body = do_get ~url ~target:(get_target slug) () in
-  Alcotest.(check int) (label ^ ": creation page 200") 200
-    (status_of response);
-  Lwt.return (Http_fixture.session_cookie label response, Http_fixture.csrf_of_page label body,
-              body)
+  Alcotest.(check int) (label ^ ": creation page 200") 200 (status_of response);
+  Lwt.return
+    ( Http_fixture.session_cookie label response,
+      Http_fixture.csrf_of_page label body,
+      body )
 
 let check_clean_redirect label expected response body =
   Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some expected)
     (Dream.header response "Location");
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": no-cache") (Some "no-cache")
+  Alcotest.(check (option string))
+    (label ^ ": no-cache") (Some "no-cache")
     (Dream.header response "Pragma");
-  Alcotest.(check (option string)) (label ^ ": no-referrer")
-    (Some "no-referrer")
+  Alcotest.(check (option string))
+    (label ^ ": no-referrer") (Some "no-referrer")
     (Dream.header response "Referrer-Policy");
   Alcotest.(check string) (label ^ ": empty body") "" body
 
 let check_generic_404 label response body =
   Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check bool) (label ^ ": generic copy") true
+  Alcotest.(check bool)
+    (label ^ ": generic copy") true
     (Html_assert.contains body "This page does not exist.")
 
 let check_generic_500 label response body =
   Alcotest.(check int) (label ^ ": 500") 500 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check bool) (label ^ ": generic copy") true
+  Alcotest.(check bool)
+    (label ^ ": generic copy") true
     (Html_assert.contains body "Something went wrong on our side.");
   List.iter
     (fun needle ->
-      Alcotest.(check bool) (label ^ ": no detail " ^ needle) false
+      Alcotest.(check bool)
+        (label ^ ": no detail " ^ needle)
+        false
         (Html_assert.contains body needle))
-    [ "communities_slug_key"; "community_projects"; "open_source_projects";
-      "Caqti"; "PostgreSQL"; "SELECT"; "search_path"; "Inconsistent";
-      "Storage_error"; "phvv_void"; "phvv_drift"
+    [
+      "communities_slug_key";
+      "community_projects";
+      "open_source_projects";
+      "Caqti";
+      "PostgreSQL";
+      "SELECT";
+      "search_path";
+      "Inconsistent";
+      "Storage_error";
+      "phvv_void";
+      "phvv_drift";
     ]
 
 (* The re-rendered creation form: the requested status, the exact feedback
    copy, a live CSRF field, and the one form pointing back at this route. *)
 let check_rerender label ~status ~feedback ~slug response body =
   Alcotest.(check int) (label ^ ": status") status (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": referrer policy")
+  Alcotest.(check (option string))
+    (label ^ ": referrer policy")
     (Some Earde.Request_origin.referrer_policy)
     (Dream.header response "Referrer-Policy");
-  Alcotest.(check bool) (label ^ ": feedback copy") true
+  Alcotest.(check bool)
+    (label ^ ": feedback copy")
+    true
     (Html_assert.contains body feedback);
-  Alcotest.(check bool) (label ^ ": fresh CSRF field") true
+  Alcotest.(check bool)
+    (label ^ ": fresh CSRF field")
+    true
     (Html_assert.contains body "name=\"dream.csrf\"");
-  Alcotest.(check bool) (label ^ ": posts back to this route") true
-    (Html_assert.contains body (Printf.sprintf "action='%s'" (post_target slug)));
-  Alcotest.(check int) (label ^ ": exactly one form") 1
+  Alcotest.(check bool)
+    (label ^ ": posts back to this route")
+    true
+    (Html_assert.contains body
+       (Printf.sprintf "action='%s'" (post_target slug)));
+  Alcotest.(check int)
+    (label ^ ": exactly one form")
+    1
     (Html_assert.occurrences (Html_assert.panel_fragment body) "<form")
 
 (* The existing community-page unavailable answer, asserted exactly as the
@@ -716,13 +749,16 @@ let check_rerender label ~status ~feedback ~slug response body =
    imposing the provisioning handler's own header contract on it. *)
 let check_community_unavailable label response body =
   Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
-  Alcotest.(check bool) (label ^ ": generic copy") true
+  Alcotest.(check bool)
+    (label ^ ": generic copy") true
     (Html_assert.contains body "This community does not exist.")
 
 let check_body_no_credentials label body =
   List.iter
     (fun (what, needle) ->
-      Alcotest.(check bool) (label ^ ": body free of " ^ what) false
+      Alcotest.(check bool)
+        (label ^ ": body free of " ^ what)
+        false
         (Html_assert.contains body needle))
     credential_markers
 
@@ -734,16 +770,18 @@ let check_no_credentials label response body =
   in
   List.iter
     (fun (what, needle) ->
-      Alcotest.(check bool) (label ^ ": headers free of " ^ what) false
+      Alcotest.(check bool)
+        (label ^ ": headers free of " ^ what)
+        false
         (Html_assert.contains headers needle))
     credential_markers
 
 (* === success: the PRG into the new private settings draft === *)
 
 let success_case =
-  db_case "POST provisioning: a steward's valid submission creates the \
-           complete private draft and redirects into its settings"
-    (fun ~url conn ->
+  db_case
+    "POST provisioning: a steward's valid submission creates the complete \
+     private draft and redirects into its settings" (fun ~url conn ->
       let* owner = insert_user conn "phvv_owner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:951000001L ~slug:"phvv-alpha"
@@ -752,7 +790,8 @@ let success_case =
       let* cookie, token, page =
         open_form "creation" ~url ~slug:"phvv-alpha" owner
       in
-      Alcotest.(check bool) "the form posts to the POST route" true
+      Alcotest.(check bool)
+        "the form posts to the POST route" true
         (Html_assert.contains page
            (Printf.sprintf "action='%s'" (post_target "phvv-alpha")));
       let* response, body =
@@ -762,7 +801,8 @@ let success_case =
                ~description:"A durable home description." ())
           ()
       in
-      check_clean_redirect "provisioned" (settings_target "phvv-provisioned")
+      check_clean_redirect "provisioned"
+        (settings_target "phvv-provisioned")
         response body;
       check_no_credentials "provisioned redirect" response body;
       (* No query, fragment, result token, or internal identifier. *)
@@ -771,14 +811,17 @@ let success_case =
       in
       List.iter
         (fun needle ->
-          Alcotest.(check bool) ("Location free of " ^ needle) false
+          Alcotest.(check bool)
+            ("Location free of " ^ needle)
+            false
             (Html_assert.contains location needle))
         [ "?"; "#"; "created"; "ok=" ];
       (* The complete durable draft, asserted through the store suite's own
          production-shape checker. *)
       let* cid, _rid =
-        Home_provisioning_fixture.check_provisioned_draft "durable" conn ~actor:owner ~project
-          ~slug:"phvv-provisioned" ~name:"Phvv Provisioned Home"
+        Home_provisioning_fixture.check_provisioned_draft "durable" conn
+          ~actor:owner ~project ~slug:"phvv-provisioned"
+          ~name:"Phvv Provisioned Home"
           ~description:"A durable home description."
       in
       Alcotest.(check bool) "a community id exists" true (cid > 0);
@@ -790,7 +833,8 @@ let success_case =
       Alcotest.(check int) "settings 200" 200 (status_of settings_response);
       (* The settings surface addresses the community by its canonical
          slug, which is exactly what the redirect built. *)
-      Alcotest.(check bool) "settings is the new community's" true
+      Alcotest.(check bool)
+        "settings is the new community's" true
         (Html_assert.contains settings_body "phvv-provisioned");
       check_no_credentials "settings" settings_response settings_body;
       Lwt.return_unit)
@@ -798,12 +842,12 @@ let success_case =
 (* === form parsing: 422 rendering and safe value preservation === *)
 
 let long_name = "Phvv " ^ String.make 130 'n'
-
 let long_description = String.make 2100 'd'
 
 let parser_rejection_case =
-  db_case "POST provisioning: every parser rejection is a 422 re-render \
-           that preserves only provably safe values" (fun ~url conn ->
+  db_case
+    "POST provisioning: every parser rejection is a 422 re-render that \
+     preserves only provably safe values" (fun ~url conn ->
       let* owner = insert_user conn "phvv_fowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:951000002L ~slug:"phvv-form"
@@ -823,18 +867,20 @@ let parser_rejection_case =
           ()
       in
       check_rerender "invalid form" ~status:422
-        ~feedback:"We couldn't read that submission." ~slug:"phvv-form"
-        response body;
+        ~feedback:"We couldn't read that submission." ~slug:"phvv-form" response
+        body;
       check_no_credentials "invalid form" response body;
       List.iter
         (fun needle ->
-          Alcotest.(check bool) ("invalid form reflects no " ^ needle) false
+          Alcotest.(check bool)
+            ("invalid form reflects no " ^ needle)
+            false
             (Html_assert.contains body needle))
-        [ "phvv_planted"; "Phvv Planted Name"; "phvv-planted";
-          "Planted body."
-        ];
-      Alcotest.(check bool) "the controls are blank" true
-        (Html_assert.contains body "name='community_slug' maxlength='80' value=''");
+        [ "phvv_planted"; "Phvv Planted Name"; "phvv-planted"; "Planted body." ];
+      Alcotest.(check bool)
+        "the controls are blank" true
+        (Html_assert.contains body
+           "name='community_slug' maxlength='80' value=''");
       (* 2. Semantic name: the exact submitted values survive. *)
       let* token = mint_token "name" ~url ~cookie in
       let* response, body =
@@ -847,10 +893,14 @@ let parser_rejection_case =
       check_rerender "invalid name" ~status:422
         ~feedback:"Enter a community name we can use." ~slug:"phvv-form"
         response body;
-      Alcotest.(check bool) "name preserved" true (Html_assert.contains body long_name);
-      Alcotest.(check bool) "slug preserved" true
+      Alcotest.(check bool)
+        "name preserved" true
+        (Html_assert.contains body long_name);
+      Alcotest.(check bool)
+        "slug preserved" true
         (Html_assert.contains body "value='phvv-kept-slug'");
-      Alcotest.(check bool) "description preserved" true
+      Alcotest.(check bool)
+        "description preserved" true
         (Html_assert.contains body ">Kept body.</textarea>");
       (* 3. Semantic slug. *)
       let* token = mint_token "slug" ~url ~cookie in
@@ -864,9 +914,11 @@ let parser_rejection_case =
       check_rerender "invalid slug" ~status:422
         ~feedback:"Enter a community address using lowercase letters"
         ~slug:"phvv-form" response body;
-      Alcotest.(check bool) "slug preserved verbatim" true
+      Alcotest.(check bool)
+        "slug preserved verbatim" true
         (Html_assert.contains body "value='Phvv-Bad-Slug'");
-      Alcotest.(check bool) "name preserved" true
+      Alcotest.(check bool)
+        "name preserved" true
         (Html_assert.contains body "value='Phvv Kept Name'");
       (* 4. Semantic description. *)
       let* token = mint_token "description" ~url ~cookie in
@@ -878,9 +930,10 @@ let parser_rejection_case =
           ()
       in
       check_rerender "invalid description" ~status:422
-        ~feedback:"That description can't be used." ~slug:"phvv-form"
-        response body;
-      Alcotest.(check bool) "description preserved" true
+        ~feedback:"That description can't be used." ~slug:"phvv-form" response
+        body;
+      Alcotest.(check bool)
+        "description preserved" true
         (Html_assert.contains body long_description);
       (* Nothing durable was created by any of the four. *)
       let* communities = find conn "communities" q_count_like "phvv-%" in
@@ -892,8 +945,8 @@ let parser_rejection_case =
       Lwt.return_unit)
 
 let escaping_case =
-  db_case "POST provisioning: every preserved value is escaped, never \
-           markup" (fun ~url conn ->
+  db_case "POST provisioning: every preserved value is escaped, never markup"
+    (fun ~url conn ->
       let* owner = insert_user conn "phvv_escowner" in
       let* _inst, _project =
         make_project conn ~user:owner ~ext_id:951000003L ~slug:"phvv-esc"
@@ -910,22 +963,26 @@ let escaping_case =
           ()
       in
       Alcotest.(check int) "422" 422 (status_of response);
-      Alcotest.(check bool) "escaped name" true
+      Alcotest.(check bool)
+        "escaped name" true
         (Html_assert.contains body "&lt;script&gt;phvv_x()&lt;/script&gt;");
-      Alcotest.(check bool) "raw name absent" false
+      Alcotest.(check bool)
+        "raw name absent" false
         (Html_assert.contains body "<script>phvv_x()</script>");
-      Alcotest.(check bool) "escaped description" true
+      Alcotest.(check bool)
+        "escaped description" true
         (Html_assert.contains body "&lt;b&gt;phvv&lt;/b&gt;");
-      Alcotest.(check bool) "raw description absent" false
+      Alcotest.(check bool)
+        "raw description absent" false
         (Html_assert.contains body "<b>phvv</b>");
       Lwt.return_unit)
 
 (* === community-slug conflict === *)
 
 let slug_conflict_case =
-  db_case "POST provisioning: a taken community slug is a 409 re-render \
-           that preserves the submission and stays retryable"
-    (fun ~url conn ->
+  db_case
+    "POST provisioning: a taken community slug is a 409 re-render that \
+     preserves the submission and stays retryable" (fun ~url conn ->
       let* owner = insert_user conn "phvv_cowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:951000004L ~slug:"phvv-conflict"
@@ -943,7 +1000,9 @@ let slug_conflict_case =
       in
       let attempt label ~token ~slug =
         let* response, body =
-          do_post ~url ~cookie ~target:(post_target "phvv-conflict") ~token
+          do_post ~url ~cookie
+            ~target:(post_target "phvv-conflict")
+            ~token
             ~body_fields:
               (fields ~name:"Phvv Conflict Home" ~slug
                  ~description:"Conflict body." ())
@@ -952,19 +1011,31 @@ let slug_conflict_case =
         check_rerender label ~status:409
           ~feedback:"That community address is already taken."
           ~slug:"phvv-conflict" response body;
-        Alcotest.(check bool) (label ^ ": slug preserved") true
+        Alcotest.(check bool)
+          (label ^ ": slug preserved")
+          true
           (Html_assert.contains body (Printf.sprintf "value='%s'" slug));
-        Alcotest.(check bool) (label ^ ": name preserved") true
+        Alcotest.(check bool)
+          (label ^ ": name preserved")
+          true
           (Html_assert.contains body "value='Phvv Conflict Home'");
-        Alcotest.(check bool) (label ^ ": description preserved") true
+        Alcotest.(check bool)
+          (label ^ ": description preserved")
+          true
           (Html_assert.contains body ">Conflict body.</textarea>");
         (* Nothing about the conflicting community leaks. *)
         List.iter
           (fun needle ->
-            Alcotest.(check bool) (label ^ ": no leak " ^ needle) false
+            Alcotest.(check bool)
+              (label ^ ": no leak " ^ needle)
+              false
               (Html_assert.contains body needle))
-          [ "Phvv Legacy"; "Phvv Network"; "visibility"; "onboarding_state";
-            "is_network_community"
+          [
+            "Phvv Legacy";
+            "Phvv Network";
+            "visibility";
+            "onboarding_state";
+            "is_network_community";
           ];
         check_no_credentials label response body;
         Lwt.return_unit
@@ -980,27 +1051,30 @@ let slug_conflict_case =
       Alcotest.(check int) "no relation after conflicts" 0 relations;
       let* token = mint_token "retry" ~url ~cookie in
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-conflict") ~token
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-conflict")
+          ~token
           ~body_fields:
             (fields ~name:"Phvv Conflict Home" ~slug:"phvv-conflict-home"
                ~description:"Conflict body." ())
           ()
       in
       check_clean_redirect "retry succeeds"
-        (settings_target "phvv-conflict-home") response body;
+        (settings_target "phvv-conflict-home")
+        response body;
       let* _ =
-        Home_provisioning_fixture.check_provisioned_draft "retry" conn ~actor:owner ~project
-          ~slug:"phvv-conflict-home" ~name:"Phvv Conflict Home"
-          ~description:"Conflict body."
+        Home_provisioning_fixture.check_provisioned_draft "retry" conn
+          ~actor:owner ~project ~slug:"phvv-conflict-home"
+          ~name:"Phvv Conflict Home" ~description:"Conflict body."
       in
       Lwt.return_unit)
 
 (* === active home, and replay === *)
 
 let active_home_case =
-  db_case "POST provisioning: a pending request or accepted home sends the \
-           steward to the authoritative home page, never a stale form"
-    (fun ~url conn ->
+  db_case
+    "POST provisioning: a pending request or accepted home sends the steward \
+     to the authoritative home page, never a stale form" (fun ~url conn ->
       let* owner = insert_user conn "phvv_aowner" in
       let* moderator = insert_user conn "phvv_amod" in
       let* _inst, project =
@@ -1019,11 +1093,14 @@ let active_home_case =
           ~community:cid
       in
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-active") ~token
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-active")
+          ~token
           ~body_fields:(fields ~slug:"phvv-active-home" ())
           ()
       in
-      check_clean_redirect "pending" (request_home_target "phvv-active")
+      check_clean_redirect "pending"
+        (request_home_target "phvv-active")
         response body;
       check_no_credentials "pending redirect" response body;
       let* communities =
@@ -1037,11 +1114,14 @@ let active_home_case =
       in
       let* token = mint_token "accepted" ~url ~cookie in
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-active") ~token
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-active")
+          ~token
           ~body_fields:(fields ~slug:"phvv-active-home" ())
           ()
       in
-      check_clean_redirect "accepted" (request_home_target "phvv-active")
+      check_clean_redirect "accepted"
+        (request_home_target "phvv-active")
         response body;
       let* communities =
         find conn "still no draft" q_count_by_slug "phvv-active-home"
@@ -1052,8 +1132,9 @@ let active_home_case =
       Lwt.return_unit)
 
 let replay_case =
-  db_case "POST provisioning: replaying a succeeded submission creates \
-           nothing and lands on the current home page" (fun ~url conn ->
+  db_case
+    "POST provisioning: replaying a succeeded submission creates nothing and \
+     lands on the current home page" (fun ~url conn ->
       let* owner = insert_user conn "phvv_rowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:951000006L ~slug:"phvv-replay"
@@ -1066,35 +1147,42 @@ let replay_case =
         fields ~name:"Phvv Replay Home" ~slug:"phvv-replay-home" ()
       in
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-replay") ~token
-          ~body_fields ()
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-replay")
+          ~token ~body_fields ()
       in
-      check_clean_redirect "first" (settings_target "phvv-replay-home")
+      check_clean_redirect "first"
+        (settings_target "phvv-replay-home")
         response body;
       (* The very same token replayed. Dream's CSRF tokens are stateless
          and session-bound rather than one-shot, so the token still
          verifies: durable idempotency, not token consumption, is what
          protects this mutation. *)
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-replay") ~token
-          ~body_fields ()
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-replay")
+          ~token ~body_fields ()
       in
       check_clean_redirect "same-token replay"
-        (request_home_target "phvv-replay") response body;
+        (request_home_target "phvv-replay")
+        response body;
       (* A freshly minted token replays to the same place. *)
       let* fresh = mint_token "fresh" ~url ~cookie in
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-replay") ~token:fresh
-          ~body_fields ()
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-replay")
+          ~token:fresh ~body_fields ()
       in
       check_clean_redirect "fresh-token replay"
-        (request_home_target "phvv-replay") response body;
+        (request_home_target "phvv-replay")
+        response body;
       (* A genuinely unusable token no longer dead-ends: it is refused
          without opening the store and answered by reloading the
          owner-authorized page. This project now has an active home, so
          that reload is exactly the generic 404 its own GET gives. *)
       let* response, body =
-        do_post ~url ~cookie ~target:(post_target "phvv-replay")
+        do_post ~url ~cookie
+          ~target:(post_target "phvv-replay")
           ~token:"phvv-not-a-token" ~body_fields ()
       in
       check_generic_404 "bad token" response body;
@@ -1110,18 +1198,18 @@ let replay_case =
       let* active = find conn "active" q_active_relations project in
       Alcotest.(check int) "exactly one active home" 1 active;
       let* _ =
-        Home_provisioning_fixture.check_provisioned_draft "after replays" conn ~actor:owner
-          ~project ~slug:"phvv-replay-home" ~name:"Phvv Replay Home"
-          ~description:"<null>"
+        Home_provisioning_fixture.check_provisioned_draft "after replays" conn
+          ~actor:owner ~project ~slug:"phvv-replay-home"
+          ~name:"Phvv Replay Home" ~description:"<null>"
       in
       Lwt.return_unit)
 
 (* === authorization loss and lifecycle drift between GET and POST === *)
 
 let drift_case =
-  db_case "POST provisioning: authorization loss and verification drift \
-           between the GET and the POST are one identical generic 404"
-    (fun ~url conn ->
+  db_case
+    "POST provisioning: authorization loss and verification drift between the \
+     GET and the POST are one identical generic 404" (fun ~url conn ->
       let* owner = insert_user conn "phvv_downer" in
       let* stranger = insert_user conn "phvv_dstranger" in
       let* admin = insert_user conn "phvv_dadmin" in
@@ -1151,20 +1239,26 @@ let drift_case =
         open_form "creation" ~url ~slug:"phvv-drift" owner
       in
       let* () =
-        exec conn "stale" Home_request_fixture.q_set_verification (drifting, "stale")
+        exec conn "stale" Home_request_fixture.q_set_verification
+          (drifting, "stale")
       in
       let* () = expect_404 "stale project" ~cookie ~token ~slug:"phvv-drift" in
       let* () =
-        exec conn "revoked" Home_request_fixture.q_set_verification (drifting, "revoked")
+        exec conn "revoked" Home_request_fixture.q_set_verification
+          (drifting, "revoked")
       in
       let* token = mint_token "revoked" ~url ~cookie in
       let* () =
         expect_404 "revoked project" ~cookie ~token ~slug:"phvv-drift"
       in
       let* () =
-        exec conn "verified" Home_request_fixture.q_set_verification (drifting, "verified")
+        exec conn "verified" Home_request_fixture.q_set_verification
+          (drifting, "verified")
       in
-      let* () = exec conn "unsteward" Home_request_fixture.q_delete_steward (drifting, owner) in
+      let* () =
+        exec conn "unsteward" Home_request_fixture.q_delete_steward
+          (drifting, owner)
+      in
       let* token = mint_token "unstewarded" ~url ~cookie in
       let* () =
         expect_404 "removed stewardship" ~cookie ~token ~slug:"phvv-drift"
@@ -1194,8 +1288,8 @@ let drift_case =
                 true (String.equal first body))
             rest);
       let* () =
-        Home_provisioning_fixture.check_no_state "drifting" conn ~project:drifting
-          ~slug:"phvv-drift-target"
+        Home_provisioning_fixture.check_no_state "drifting" conn
+          ~project:drifting ~slug:"phvv-drift-target"
       in
       Home_provisioning_fixture.check_no_state "healthy" conn ~project:healthy
         ~slug:"phvv-drift-target")
@@ -1203,9 +1297,9 @@ let drift_case =
 (* === durable failure === *)
 
 let inconsistent_case =
-  db_case "POST provisioning: a durable identity drift inside the \
-           transaction is one generic non-cacheable 500, with no partial \
-           draft" (fun ~url conn ->
+  db_case
+    "POST provisioning: a durable identity drift inside the transaction is one \
+     generic non-cacheable 500, with no partial draft" (fun ~url conn ->
       let* owner = insert_user conn "phvv_icowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:951000009L ~slug:"phvv-ic"
@@ -1226,16 +1320,16 @@ let inconsistent_case =
           in
           check_generic_500 "identity drift" response body;
           check_no_credentials "identity drift" response body;
-          Home_provisioning_fixture.check_no_state "identity drift" conn ~project
-            ~slug:"phvv-drift-home")
+          Home_provisioning_fixture.check_no_state "identity drift" conn
+            ~project ~slug:"phvv-drift-home")
         (fun () ->
           let* () = exec conn "drop trigger" q_drop_drift_trigger () in
           exec conn "drop fn" q_drop_drift_fn ()))
 
 let storage_case =
-  db_case "POST provisioning: a real database failure is one generic \
-           non-cacheable 500 on both the store and the re-render path"
-    (fun ~url _conn ->
+  db_case
+    "POST provisioning: a real database failure is one generic non-cacheable \
+     500 on both the store and the re-render path" (fun ~url _conn ->
       let poisoned =
         Uri.to_string
           (Uri.add_query_param' (Uri.of_string url)
@@ -1253,25 +1347,30 @@ let storage_case =
       in
       let* response, _ =
         do_post ~pipeline:limited_pipe ~url ~cookie
-          ~target:(post_target "phvv-anything") ~token
+          ~target:(post_target "phvv-anything")
+          ~token
           ~body_fields:(fields ~slug:"phvv-void-home" ())
           ()
       in
       Alcotest.(check int) "limiter refuses first" 503 (status_of response);
-      let poison_pipe = build_pipeline_with ~limit:allowing_limiter ~url:poisoned in
+      let poison_pipe =
+        build_pipeline_with ~limit:allowing_limiter ~url:poisoned
+      in
       let* cookie, token =
         open_session ~pipeline:poison_pipe "poisoned" ~url 424242
       in
       let* response, body =
         do_post ~pipeline:poison_pipe ~url ~cookie
-          ~target:(post_target "phvv-anything") ~token
+          ~target:(post_target "phvv-anything")
+          ~token
           ~body_fields:(fields ~slug:"phvv-void-home" ())
           ()
       in
       check_generic_500 "poisoned store call" response body;
       let* response, body =
         do_post ~pipeline:poison_pipe ~url ~cookie
-          ~target:(post_target "phvv-anything") ~token
+          ~target:(post_target "phvv-anything")
+          ~token
           ~body_fields:(fields ~slug:"Phvv-Bad" ())
           ()
       in
@@ -1284,9 +1383,9 @@ let location response =
   match Dream.header response "Location" with Some l -> l | None -> ""
 
 let same_project_race_case =
-  db_case "POST provisioning: two concurrent submissions for one project \
-           leave exactly one community; the loser lands on the home page"
-    (fun ~url conn ->
+  db_case
+    "POST provisioning: two concurrent submissions for one project leave \
+     exactly one community; the loser lands on the home page" (fun ~url conn ->
       let* owner = insert_user conn "phvv_p1owner" in
       let* second = insert_user conn "phvv_p1second" in
       let* inst, project =
@@ -1319,16 +1418,14 @@ let same_project_race_case =
       in
       let win, win_body, lose, lose_body, winning_slug, losing_slug =
         if a_lost then
-          (response_b, body_b, response_a, body_a, "phvv-race-b",
-           "phvv-race-a")
+          (response_b, body_b, response_a, body_a, "phvv-race-b", "phvv-race-a")
         else
-          (response_a, body_a, response_b, body_b, "phvv-race-a",
-           "phvv-race-b")
+          (response_a, body_a, response_b, body_b, "phvv-race-a", "phvv-race-b")
       in
-      check_clean_redirect "winner" (settings_target winning_slug) win
-        win_body;
-      check_clean_redirect "loser" (request_home_target "phvv-race") lose
-        lose_body;
+      check_clean_redirect "winner" (settings_target winning_slug) win win_body;
+      check_clean_redirect "loser"
+        (request_home_target "phvv-race")
+        lose lose_body;
       let* winners = find conn "winner row" q_count_by_slug winning_slug in
       Alcotest.(check int) "winning community exists" 1 winners;
       let* losers = find conn "loser row" q_count_by_slug losing_slug in
@@ -1342,8 +1439,9 @@ let same_project_race_case =
       Lwt.return_unit)
 
 let same_slug_race_case =
-  db_case "POST provisioning: two projects racing for one community slug \
-           leave one winner and a clean 409 loser" (fun ~url conn ->
+  db_case
+    "POST provisioning: two projects racing for one community slug leave one \
+     winner and a clean 409 loser" (fun ~url conn ->
       let* owner_a = insert_user conn "phvv_s1owner" in
       let* owner_b = insert_user conn "phvv_s2owner" in
       let* _inst_a, project_a =
@@ -1365,38 +1463,59 @@ let same_slug_race_case =
       in
       let* (response_a, body_a), (response_b, body_b) =
         Lwt.both
-          (do_post ~url ~cookie:cookie_a ~target:(post_target "phvv-slug-a")
+          (do_post ~url ~cookie:cookie_a
+             ~target:(post_target "phvv-slug-a")
              ~token:token_a ~body_fields ())
-          (do_post ~url ~cookie:cookie_b ~target:(post_target "phvv-slug-b")
+          (do_post ~url ~cookie:cookie_b
+             ~target:(post_target "phvv-slug-b")
              ~token:token_b ~body_fields ())
       in
       let a_won = status_of response_a = 303 in
-      let ( winner, winner_body, winner_project, loser, loser_body,
-            loser_project, loser_slug ) =
+      let ( winner,
+            winner_body,
+            winner_project,
+            loser,
+            loser_body,
+            loser_project,
+            loser_slug ) =
         if a_won then
-          (response_a, body_a, project_a, response_b, body_b, project_b,
-           "phvv-slug-b")
+          ( response_a,
+            body_a,
+            project_a,
+            response_b,
+            body_b,
+            project_b,
+            "phvv-slug-b" )
         else
-          (response_b, body_b, project_b, response_a, body_a, project_a,
-           "phvv-slug-a")
+          ( response_b,
+            body_b,
+            project_b,
+            response_a,
+            body_a,
+            project_a,
+            "phvv-slug-a" )
       in
-      check_clean_redirect "winner" (settings_target "phvv-shared-home")
+      check_clean_redirect "winner"
+        (settings_target "phvv-shared-home")
         winner winner_body;
       check_rerender "loser" ~status:409
         ~feedback:"That community address is already taken." ~slug:loser_slug
         loser loser_body;
-      Alcotest.(check bool) "loser keeps its submission" true
+      Alcotest.(check bool)
+        "loser keeps its submission" true
         (Html_assert.contains loser_body "value='phvv-shared-home'");
       let* communities =
         find conn "communities" q_count_by_slug "phvv-shared-home"
       in
       Alcotest.(check int) "exactly one community" 1 communities;
       let* winner_relations =
-        find conn "winner relations" Home_request_fixture.q_count_for_project winner_project
+        find conn "winner relations" Home_request_fixture.q_count_for_project
+          winner_project
       in
       Alcotest.(check int) "winner has one relation" 1 winner_relations;
       let* loser_relations =
-        find conn "loser relations" Home_request_fixture.q_count_for_project loser_project
+        find conn "loser relations" Home_request_fixture.q_count_for_project
+          loser_project
       in
       Alcotest.(check int) "loser has no relation" 0 loser_relations;
       Lwt.return_unit)
@@ -1404,8 +1523,9 @@ let same_slug_race_case =
 (* === destination authorization and draft privacy === *)
 
 let destination_case =
-  db_case "POST provisioning: the new draft stays private to its creator \
-           and out of public discovery" (fun ~url conn ->
+  db_case
+    "POST provisioning: the new draft stays private to its creator and out of \
+     public discovery" (fun ~url conn ->
       let* owner = insert_user conn "phvv_destowner" in
       let* stranger = insert_user conn "phvv_deststranger" in
       let* _inst, _project =
@@ -1417,46 +1537,53 @@ let destination_case =
       in
       let* response, body =
         do_post ~url ~cookie ~target:(post_target "phvv-dest") ~token
-          ~body_fields:
-            (fields ~name:"Phvv Dest Home" ~slug:"phvv-dest-home" ())
+          ~body_fields:(fields ~name:"Phvv Dest Home" ~slug:"phvv-dest-home" ())
           ()
       in
-      check_clean_redirect "provisioned" (settings_target "phvv-dest-home")
+      check_clean_redirect "provisioned"
+        (settings_target "phvv-dest-home")
         response body;
       (* The creator: settings and the community page are both authorized,
          and the draft is not indexable. *)
       let* settings_response, settings_body =
         do_get ~url ~cookie ~target:(settings_target "phvv-dest-home") ()
       in
-      Alcotest.(check int) "creator settings 200" 200
+      Alcotest.(check int)
+        "creator settings 200" 200
         (status_of settings_response);
-      Alcotest.(check bool) "settings is the draft's own" true
+      Alcotest.(check bool)
+        "settings is the draft's own" true
         (Html_assert.contains settings_body "phvv-dest-home");
       let* page_response, page_body =
         do_get ~url ~cookie ~target:(community_target "phvv-dest-home") ()
       in
-      Alcotest.(check int) "creator community page 200" 200
-        (status_of page_response);
-      Alcotest.(check bool) "the draft is noindex" true
+      Alcotest.(check int)
+        "creator community page 200" 200 (status_of page_response);
+      Alcotest.(check bool)
+        "the draft is noindex" true
         (Html_assert.contains page_body "content='noindex'");
       (* An unrelated authenticated user. *)
       let* stranger_cookie, _ = open_session "stranger" ~url stranger in
       let* response, body =
         do_get ~url ~cookie:stranger_cookie
-          ~target:(community_target "phvv-dest-home") ()
+          ~target:(community_target "phvv-dest-home")
+          ()
       in
       check_community_unavailable "stranger community page" response body;
-      Alcotest.(check bool) "stranger page carries no draft identity" false
+      Alcotest.(check bool)
+        "stranger page carries no draft identity" false
         (Html_assert.contains body "phvv-dest-home");
       let* response, body =
         do_get ~url ~cookie:stranger_cookie
-          ~target:(settings_target "phvv-dest-home") ()
+          ~target:(settings_target "phvv-dest-home")
+          ()
       in
-      Alcotest.(check int) "stranger settings refused" 403
-        (status_of response);
-      Alcotest.(check bool) "stranger sees no draft content" false
+      Alcotest.(check int) "stranger settings refused" 403 (status_of response);
+      Alcotest.(check bool)
+        "stranger sees no draft content" false
         (Html_assert.contains body "Phvv Dest Home");
-      Alcotest.(check bool) "stranger sees no draft slug" false
+      Alcotest.(check bool)
+        "stranger sees no draft slug" false
         (Html_assert.contains body "phvv-dest-home");
       (* An anonymous visitor. *)
       as_anonymous ();
@@ -1464,29 +1591,35 @@ let destination_case =
         do_get ~url ~target:(community_target "phvv-dest-home") ()
       in
       check_community_unavailable "anonymous community page" response body;
-      Alcotest.(check bool) "anonymous page carries no draft identity" false
+      Alcotest.(check bool)
+        "anonymous page carries no draft identity" false
         (Html_assert.contains body "phvv-dest-home");
       let* response, body =
         do_get ~url ~target:(settings_target "phvv-dest-home") ()
       in
-      Alcotest.(check bool) "anonymous settings never render the draft" true
+      Alcotest.(check bool)
+        "anonymous settings never render the draft" true
         (status_of response = 302 || status_of response = 303);
-      Alcotest.(check bool) "anonymous body carries no draft identity" false
+      Alcotest.(check bool)
+        "anonymous body carries no draft identity" false
         (Html_assert.contains body "Phvv Dest Home");
       (* Public discovery: the real search query cannot see it. *)
-      let* found = Earde.Community_store.search_communities conn "Phvv Dest" 20 0 in
+      let* found =
+        Earde.Community_store.search_communities conn "Phvv Dest" 20 0
+      in
       (match found with
       | Ok rows ->
-          Alcotest.(check int) "absent from public discovery" 0
-            (List.length rows)
+          Alcotest.(check int)
+            "absent from public discovery" 0 (List.length rows)
       | Error e -> Alcotest.failf "discovery query failed: %s" e);
       Lwt.return_unit)
 
 (* === the mutation rate limiter really wraps this route === *)
 
 let rate_limit_case =
-  db_case "POST provisioning: the route carries the shared \
-           authenticated-mutation rate limit" (fun ~url _conn ->
+  db_case
+    "POST provisioning: the route carries the shared authenticated-mutation \
+     rate limit" (fun ~url _conn ->
       let* cookie, token = open_session "rate limit" ~url 424243 in
       let target = post_target "phvv-ratelimit" in
       (* The project does not exist, so every allowed attempt is the
@@ -1500,7 +1633,8 @@ let rate_limit_case =
               ~body_fields:(fields ~slug:"phvv-ratelimit-home" ())
               ()
           in
-          if Html_assert.contains body "Too Many Attempts" then Lwt.return (n, response)
+          if Html_assert.contains body "Too Many Attempts" then
+            Lwt.return (n, response)
           else (
             Alcotest.(check int)
               (Printf.sprintf "attempt %d is the generic 404" n)
@@ -1508,17 +1642,17 @@ let rate_limit_case =
             drive (n + 1))
       in
       let* attempts, response = drive 1 in
-      Alcotest.(check bool) "blocked only after several attempts" true
-        (attempts > 1);
+      Alcotest.(check bool)
+        "blocked only after several attempts" true (attempts > 1);
       Alcotest.(check int) "blocked page status" 200 (status_of response);
       Lwt.return_unit)
 
 (* === privacy sweep === *)
 
 let privacy_case =
-  db_case "POST provisioning: no credential-shaped fixture reaches any \
-           response, redirect, cookie, or the created draft"
-    (fun ~url conn ->
+  db_case
+    "POST provisioning: no credential-shaped fixture reaches any response, \
+     redirect, cookie, or the created draft" (fun ~url conn ->
       let* owner = insert_user conn "phvv_privowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:951000001L ~slug:"phvv-priv"
@@ -1551,7 +1685,8 @@ let privacy_case =
                ~description:"Safe body." ())
           ()
       in
-      check_clean_redirect "success" (settings_target "phvv-priv-home")
+      check_clean_redirect "success"
+        (settings_target "phvv-priv-home")
         response body;
       check_no_credentials "success redirect" response body;
       let* settings_response, settings_body =
@@ -1560,11 +1695,12 @@ let privacy_case =
       check_no_credentials "settings page" settings_response settings_body;
       (* The intentionally supplied safe identity is what survives —
          the slug on the settings surface, the full identity durably. *)
-      Alcotest.(check bool) "the supplied slug is present" true
+      Alcotest.(check bool)
+        "the supplied slug is present" true
         (Html_assert.contains settings_body "phvv-priv-home");
       let* _ =
-        Home_provisioning_fixture.check_provisioned_draft "privacy" conn ~actor:owner ~project
-          ~slug:"phvv-priv-home" ~name:"Phvv Priv Home"
+        Home_provisioning_fixture.check_provisioned_draft "privacy" conn
+          ~actor:owner ~project ~slug:"phvv-priv-home" ~name:"Phvv Priv Home"
           ~description:"Safe body."
       in
       Lwt.return_unit)
@@ -1602,13 +1738,13 @@ let form_control_names label ~slug html =
   let rec scan from acc =
     match Html_assert.index_from form "name=" from with
     | None -> List.rev acc
-    | Some i ->
+    | Some i -> (
         let quote_at = i + String.length "name=" in
         if quote_at >= String.length form then List.rev acc
         else
           let quote = form.[quote_at] in
           let start = quote_at + 1 in
-          (match String.index_from_opt form start quote with
+          match String.index_from_opt form start quote with
           | None -> List.rev acc
           | Some e -> scan (e + 1) (String.sub form start (e - start) :: acc))
   in
@@ -1616,9 +1752,10 @@ let form_control_names label ~slug html =
 
 (* The navigation metadata a same-origin form POST really carries. *)
 let browser_headers =
-  [ ("Sec-Fetch-Site", "same-origin");
+  [
+    ("Sec-Fetch-Site", "same-origin");
     ("Sec-Fetch-Mode", "navigate");
-    ("Referer", "https://earde.com" ^ get_target "phvv-browser")
+    ("Referer", "https://earde.com" ^ get_target "phvv-browser");
   ]
 
 (* The authenticated-mutation rate limiter allows five attempts per IP and
@@ -1627,7 +1764,7 @@ let browser_headers =
    this one resets its window between phases rather than re-proving it. *)
 let q_clear_rate_limits =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'"
+    "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'"
 
 let clear_rate_limit conn =
   let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -1637,31 +1774,31 @@ let clear_rate_limit conn =
 
 let q_count_audit =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM project_home_audit_events WHERE project_id = $1"
+    "SELECT COUNT(*) FROM project_home_audit_events WHERE project_id = $1"
 
 let q_count_notifs =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM notifications WHERE project_id = $1"
+    "SELECT COUNT(*) FROM notifications WHERE project_id = $1"
 
 let q_count_members_like =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_members m \
-   JOIN communities c ON c.id = m.community_id WHERE c.slug LIKE $1"
+    "SELECT COUNT(*) FROM community_members m JOIN communities c ON c.id = \
+     m.community_id WHERE c.slug LIKE $1"
 
 let q_count_mods_like =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_moderators m \
-   JOIN communities c ON c.id = m.community_id WHERE c.slug LIKE $1"
+    "SELECT COUNT(*) FROM community_moderators m JOIN communities c ON c.id = \
+     m.community_id WHERE c.slug LIKE $1"
 
 let q_count_sections_like =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_sections s \
-   JOIN communities c ON c.id = s.community_id WHERE c.slug LIKE $1"
+    "SELECT COUNT(*) FROM community_sections s JOIN communities c ON c.id = \
+     s.community_id WHERE c.slug LIKE $1"
 
 let q_count_channels_like =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM channels ch \
-   JOIN communities c ON c.id = ch.community_id WHERE c.slug LIKE $1"
+    "SELECT COUNT(*) FROM channels ch JOIN communities c ON c.id = \
+     ch.community_id WHERE c.slug LIKE $1"
 
 (* Nothing of a community home exists anywhere: not the community, not the
    relation, not the membership, role, section, channel, audit event, or
@@ -1686,14 +1823,14 @@ let check_nothing_created label conn ~project =
   Lwt.return_unit
 
 let browser_contract_case =
-  db_case "POST provisioning: the rendered form's own fields and token \
-           redirect, a stale or forged token re-renders a usable form \
-           without creating anything, and exactly one complete draft \
-           results" (fun ~url conn ->
+  db_case
+    "POST provisioning: the rendered form's own fields and token redirect, a \
+     stale or forged token re-renders a usable form without creating anything, \
+     and exactly one complete draft results" (fun ~url conn ->
       let* owner = insert_user conn "phvv_browser" in
       let* _inst, project =
-        make_project conn ~user:owner ~ext_id:951000002L
-          ~slug:"phvv-browser" ~name:"Phvv Browser"
+        make_project conn ~user:owner ~ext_id:951000002L ~slug:"phvv-browser"
+          ~name:"Phvv Browser"
       in
       let* cookie, page_token, page =
         open_form "browser" ~url ~slug:"phvv-browser" owner
@@ -1714,15 +1851,19 @@ let browser_contract_case =
       let names = form_control_names "browser" ~slug:"phvv-browser" page in
       Alcotest.(check (list string))
         "exactly the framework field and the three application fields"
-        [ "dream.csrf"; "community_name"; "community_slug";
-          "community_description"
+        [
+          "dream.csrf";
+          "community_name";
+          "community_slug";
+          "community_description";
         ]
         names;
       (* The submitted body is built from those names alone. *)
       let typed =
-        [ ("community_name", "Phvv Browser Home");
+        [
+          ("community_name", "Phvv Browser Home");
           ("community_slug", "phvv-browser-home");
-          ("community_description", "Private draft for local smoke testing.")
+          ("community_description", "Private draft for local smoke testing.");
         ]
       in
       let body_fields =
@@ -1736,8 +1877,9 @@ let browser_contract_case =
           names
       in
       let post ?origin ?omit_token ~token () =
-        do_post ?origin ?omit_token ~extra_headers:browser_headers ~url
-          ~cookie ~target:(post_target "phvv-browser") ~token ~body_fields ()
+        do_post ?origin ?omit_token ~extra_headers:browser_headers ~url ~cookie
+          ~target:(post_target "phvv-browser")
+          ~token ~body_fields ()
       in
 
       (* --- 2. the exact production failure: an authentic same-session
@@ -1745,8 +1887,8 @@ let browser_contract_case =
       let* expired = mint_expired_token "expired" ~url ~cookie in
       let* response, body = post ~token:expired () in
       check_rerender "expired token" ~status:403
-        ~feedback:"This page had been open too long"
-        ~slug:"phvv-browser" response body;
+        ~feedback:"This page had been open too long" ~slug:"phvv-browser"
+        response body;
       check_no_credentials "expired token" response body;
       let* () = check_nothing_created "expired token" conn ~project in
 
@@ -1754,20 +1896,20 @@ let browser_contract_case =
          refused exactly as hard, and still creates nothing --- *)
       let* response, body = post ~token:"not-a-token" () in
       check_rerender "forged token" ~status:403
-        ~feedback:"This page had been open too long"
-        ~slug:"phvv-browser" response body;
+        ~feedback:"This page had been open too long" ~slug:"phvv-browser"
+        response body;
       let* response, body = post ~omit_token:true ~token:"" () in
       check_rerender "absent token" ~status:403
-        ~feedback:"This page had been open too long"
-        ~slug:"phvv-browser" response body;
+        ~feedback:"This page had been open too long" ~slug:"phvv-browser"
+        response body;
       (* Another session's live token is not this session's. *)
       let* other_cookie, _ = open_session "other" ~url owner in
       let* foreign = mint_token "foreign" ~url ~cookie:other_cookie in
       as_user owner;
       let* response, body = post ~token:foreign () in
       check_rerender "foreign-session token" ~status:403
-        ~feedback:"This page had been open too long"
-        ~slug:"phvv-browser" response body;
+        ~feedback:"This page had been open too long" ~slug:"phvv-browser"
+        response body;
       let* () = check_nothing_created "rejected tokens" conn ~project in
 
       (* --- 4. the origin gate is untouched: a cross-origin POST carrying
@@ -1778,13 +1920,17 @@ let browser_contract_case =
         post ~origin:(Some "https://evil.example") ~token:page_token ()
       in
       Alcotest.(check int) "cross-origin: 403" 403 (status_of response);
-      Alcotest.(check bool) "cross-origin: no form" false
+      Alcotest.(check bool)
+        "cross-origin: no form" false
         (Html_assert.contains body "phv-form");
-      Alcotest.(check bool) "cross-origin: no fresh token" false
+      Alcotest.(check bool)
+        "cross-origin: no fresh token" false
         (Html_assert.contains body "name=\"dream.csrf\"");
-      Alcotest.(check bool) "cross-origin: generic refusal" true
+      Alcotest.(check bool)
+        "cross-origin: generic refusal" true
         (Html_assert.contains body "This request is not allowed.");
-      Alcotest.(check bool) "cross-origin: origin never reflected" false
+      Alcotest.(check bool)
+        "cross-origin: origin never reflected" false
         (Html_assert.contains body "evil.example");
       let* () = check_nothing_created "cross-origin" conn ~project in
 
@@ -1793,18 +1939,21 @@ let browser_contract_case =
       let* () = clear_rate_limit conn in
       let* response, body = post ~token:expired () in
       let recovered = Http_fixture.csrf_of_page "recovered" body in
-      Alcotest.(check bool) "the re-render carries a different token" true
+      Alcotest.(check bool)
+        "the re-render carries a different token" true
         (not (String.equal recovered expired));
-      Alcotest.(check int) "the re-render is still a refusal" 403
-        (status_of response);
+      Alcotest.(check int)
+        "the re-render is still a refusal" 403 (status_of response);
       let* response, body = post ~token:recovered () in
       check_clean_redirect "recovered submission"
-        (settings_target "phvv-browser-home") response body;
+        (settings_target "phvv-browser-home")
+        response body;
 
       (* --- 6. exactly one complete draft, and no second one --- *)
       let* _cid, _rid =
-        Home_provisioning_fixture.check_provisioned_draft "browser" conn ~actor:owner ~project
-          ~slug:"phvv-browser-home" ~name:"Phvv Browser Home"
+        Home_provisioning_fixture.check_provisioned_draft "browser" conn
+          ~actor:owner ~project ~slug:"phvv-browser-home"
+          ~name:"Phvv Browser Home"
           ~description:"Private draft for local smoke testing."
       in
       let* communities = find conn "communities" q_count_like "phvv-%" in
@@ -1816,14 +1965,26 @@ let browser_contract_case =
       Lwt.return_unit)
 
 let db_suite =
-  [ success_case; browser_contract_case; parser_rejection_case;
-    escaping_case; slug_conflict_case; active_home_case; replay_case;
-    drift_case; inconsistent_case; storage_case; same_project_race_case;
-    same_slug_race_case; destination_case; rate_limit_case; privacy_case
+  [
+    success_case;
+    browser_contract_case;
+    parser_rejection_case;
+    escaping_case;
+    slug_conflict_case;
+    active_home_case;
+    replay_case;
+    drift_case;
+    inconsistent_case;
+    storage_case;
+    same_project_race_case;
+    same_slug_race_case;
+    destination_case;
+    rate_limit_case;
+    privacy_case;
   ]
 
 let suites =
-    (* The provisioning POST route: the exact registered pattern with no
+  (* The provisioning POST route: the exact registered pattern with no
        alias, the DB-free rollout/authentication gates (every rejection
        precedes any route read, configuration load, origin check, form
        parse, or SQL), the configuration/origin/CSRF sequence, and the
@@ -1833,9 +1994,10 @@ let suites =
        drift, durable failure, real two-connection concurrency, destination
        authorization and draft privacy, the mutation rate limit, and the
        privacy sweep. *)
-  [ ("project_home_provisioning_post_route", route_cases)
-  ; ("project_home_provisioning_post_gates", gate_cases)
-  ; ("project_home_provisioning_post_config_origin", config_origin_cases)
-  ; ("project_home_provisioning_post_csrf", csrf_cases)
-  ; ("project_home_provisioning_post_db", db_suite)
+  [
+    ("project_home_provisioning_post_route", route_cases);
+    ("project_home_provisioning_post_gates", gate_cases);
+    ("project_home_provisioning_post_config_origin", config_origin_cases);
+    ("project_home_provisioning_post_csrf", csrf_cases);
+    ("project_home_provisioning_post_db", db_suite);
   ]

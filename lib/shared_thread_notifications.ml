@@ -28,9 +28,7 @@ type kind =
   | Placement_removed
   | Placement_withdrawn
 
-type error =
-  | Inconsistent_data
-  | Storage_error
+type error = Inconsistent_data | Storage_error
 
 (* Private: the durable vocabulary, byte-for-byte the table's CHECK. *)
 let string_of_kind = function
@@ -55,9 +53,8 @@ let string_of_kind = function
 let top_moderators_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* Caqti_type.int)
-  "SELECT user_id FROM community_moderators \
-   WHERE community_id = $1 AND role = 'top_mod' \
-   ORDER BY user_id"
+    "SELECT user_id FROM community_moderators WHERE community_id = $1 AND role \
+     = 'top_mod' ORDER BY user_id"
 
 let community_top_moderator_ids (module C : Caqti_lwt.CONNECTION) ~community_id
     =
@@ -80,12 +77,10 @@ let community_top_moderator_ids (module C : Caqti_lwt.CONNECTION) ~community_id
 let insert_notification_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t3 int string int) (t2 int int64))
-   ->? Caqti_type.(t3 int string int))
-  "INSERT INTO notifications \
-     (user_id, notif_type, actor_user_id, community_id, \
-      shared_thread_placement_id) \
-   VALUES ($1, $2, $3, $4, $5) \
-   RETURNING id, notif_type, user_id"
+  ->? Caqti_type.(t3 int string int))
+    "INSERT INTO notifications (user_id, notif_type, actor_user_id, \
+     community_id, shared_thread_placement_id) VALUES ($1, $2, $3, $4, $5) \
+     RETURNING id, notif_type, user_id"
 
 let insert_many (module C : Caqti_lwt.CONNECTION) ~kind ~actor_user_id
     ~placement_id ~recipients =
@@ -128,8 +123,8 @@ let insert_many (module C : Caqti_lwt.CONNECTION) ~kind ~actor_user_id
           (* As in the sibling stores, every Caqti error is dropped
              payload-free — error payloads can echo SQL parameters. *)
           C.find_opt insert_notification_query
-            ((recipient, kind_string, actor_user_id),
-             (community_id, placement_id))
+            ( (recipient, kind_string, actor_user_id),
+              (community_id, placement_id) )
           >>= function
           | Error _ -> Lwt.return (Error Storage_error)
           | Ok None ->

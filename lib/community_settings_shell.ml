@@ -56,7 +56,8 @@ let canonical_network_slug value =
    this only suppresses a pointless link, never grants anything. *)
 let can_complete_setup ~(community : Community_types.community) ~authorized =
   community.Community_types.is_network_community
-  && community.Community_types.onboarding_state = Community_types.Community_draft
+  && community.Community_types.onboarding_state
+     = Community_types.Community_draft
   && authorized
   && canonical_network_slug community.slug
 
@@ -64,13 +65,12 @@ let can_complete_setup ~(community : Community_types.community) ~authorized =
    canonical back link. Every shell surface renders this exact band, so the
    header can never drift per surface again. *)
 let header ~slug =
-  let slug = (Html.text (slug)) in
-  (Html.template "<div class='cm-head'>\
-     <h1 class='cm-h1'>&#x2699;&#xFE0F; /c/%s <span class='accent'>settings</span></h1>\
-     <a href='/c/%s' class='cm-back'>&larr; Back to community</a>\
-     </div>"
-  [ slug
-  ; slug ])
+  let slug = Html.text slug in
+  Html.template
+    "<div class='cm-head'><h1 class='cm-h1'>&#x2699;&#xFE0F; /c/%s <span \
+     class='accent'>settings</span></h1><a href='/c/%s' class='cm-back'>&larr; \
+     Back to community</a></div>"
+    [ slug; slug ]
 
 (* The grouped internal settings navigation. Groups render only when they
    have at least one visible entry, so a regular moderator gets a coherent
@@ -87,8 +87,12 @@ let nav ~slug ~active ~can_complete_setup ~network_manager () =
     let active_cls = if key = active then " cm-index-link--active" else "" in
     let danger_cls = if danger then " cm-index-link--danger" else "" in
     Html.template "<a class='cm-index-link%s%s' href='%s'>%s</a>"
-      [ Html.text danger_cls; Html.text active_cls; Html.internal_path href;
-        label ]
+      [
+        Html.text danger_cls;
+        Html.text active_cls;
+        Html.internal_path href;
+        label;
+      ]
   in
   let path suffix = Printf.sprintf "/c/%s%s" slug suffix in
   let panel_href key = path ("/settings?panel=" ^ key) in
@@ -101,48 +105,57 @@ let nav ~slug ~active ~can_complete_setup ~network_manager () =
   in
   let community_group =
     group "Community"
-      [ (if can_complete_setup then
+      [
+        (if can_complete_setup then
            link ~key:Setup_publish (path "/setup")
              (Html.static "Complete setup and publish")
          else Html.empty);
         link ~key:Profile (panel_href "profile") (Html.static "Profile");
         link ~key:Visibility (panel_href "visibility")
-          (Html.static "Visibility &amp; discovery")
+          (Html.static "Visibility &amp; discovery");
       ]
   in
   let network_group =
     if not network_manager then Html.empty
     else
       group "Network"
-        [ link ~key:Connected_projects (panel_href "projects")
+        [
+          link ~key:Connected_projects (panel_href "projects")
             (Html.static "Connected projects");
-          link ~key:Home_requests (path "/project-home-requests")
+          link ~key:Home_requests
+            (path "/project-home-requests")
             (Html.static "Project home requests");
-          link ~key:Connections (path "/settings/connections")
+          link ~key:Connections
+            (path "/settings/connections")
             (Html.static "Connections");
-          link ~key:Shared_threads (path "/settings/shared-threads")
-            (Html.static "Shared threads")
+          link ~key:Shared_threads
+            (path "/settings/shared-threads")
+            (Html.static "Shared threads");
         ]
   in
   let structure_group =
     group "Structure"
-      [ link ~key:Channels (panel_href "channels")
-          (Html.static "Channels &amp; sections") ]
+      [
+        link ~key:Channels (panel_href "channels")
+          (Html.static "Channels &amp; sections");
+      ]
   in
   let people_group =
     group "People"
-      [ link ~key:Members (panel_href "members") (Html.static "Members");
+      [
+        link ~key:Members (panel_href "members") (Html.static "Members");
         (if network_manager then
            link ~key:Manage_moderators (path "/manage-mods")
              (Html.static "Manage moderators")
          else Html.empty);
         link ~key:Moderation (panel_href "moderation")
           (Html.static "Moderation");
-        link ~danger:true ~key:Bans (panel_href "bans") (Html.static "Bans")
+        link ~danger:true ~key:Bans (panel_href "bans") (Html.static "Bans");
       ]
   in
   Html.template
-    "<nav class='cm-index'><div class='cm-index-title'>Settings</div>%s%s%s%s</nav>"
+    "<nav class='cm-index'><div \
+     class='cm-index-title'>Settings</div>%s%s%s%s</nav>"
     [ community_group; network_group; structure_group; people_group ]
 
 (* The whole shell around a rendered panel: header band, then the index
@@ -150,7 +163,11 @@ let nav ~slug ~active ~can_complete_setup ~network_manager () =
    cm-wrap--settings modifier is the one CSS scope for the shell structure,
    so a surface adopting the shell needs no page-class-specific layout CSS. *)
 let wrap ~slug ~active ~can_complete_setup ~network_manager ~panel () =
-  (Html.template "<div class='cm-wrap cm-wrap--settings'>%s<div class='cm-cols'>%s<div class='cm-main'>%s</div></div></div>"
-  [ (header ~slug)
-  ; (nav ~slug ~active ~can_complete_setup ~network_manager ())
-  ; panel ])
+  Html.template
+    "<div class='cm-wrap cm-wrap--settings'>%s<div class='cm-cols'>%s<div \
+     class='cm-main'>%s</div></div></div>"
+    [
+      header ~slug;
+      nav ~slug ~active ~can_complete_setup ~network_manager ();
+      panel;
+    ]

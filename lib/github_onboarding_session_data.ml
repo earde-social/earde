@@ -15,8 +15,7 @@ type t = {
   verifier : Github_onboarding_pkce.verifier;
 }
 
-type parse_error =
-  | Invalid_format
+type parse_error = Invalid_format
 
 let version = "v1"
 

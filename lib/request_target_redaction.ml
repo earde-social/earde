@@ -7,7 +7,6 @@
    email-verification links; [state] the GitHub onboarding CSRF state; [code]
    the future GitHub OAuth authorization code. No speculative keys. *)
 let sensitive_keys = [ "token"; "state"; "code" ]
-
 let replacement = "[REDACTED]"
 
 let redact_target target =

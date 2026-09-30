@@ -16,9 +16,7 @@ type action =
   | Dedicated_home_provisioned
   | Network_community_published
 
-type error =
-  | Inconsistent_data
-  | Storage_error
+type error = Inconsistent_data | Storage_error
 
 (* Private: the durable vocabulary, byte-for-byte the table's CHECK. *)
 let string_of_action = function
@@ -36,14 +34,13 @@ let string_of_action = function
 let insert_event_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 string int) (t3 int64 int int64))
-   ->? Caqti_type.(t2 int64 string))
-  "INSERT INTO project_home_audit_events \
-     (action, actor_user_id, project_id, community_id, relation_id) \
-   VALUES ($1, $2, $3, $4, $5) \
-   RETURNING id, action"
+  ->? Caqti_type.(t2 int64 string))
+    "INSERT INTO project_home_audit_events (action, actor_user_id, project_id, \
+     community_id, relation_id) VALUES ($1, $2, $3, $4, $5) RETURNING id, \
+     action"
 
-let insert (module C : Caqti_lwt.CONNECTION) ~action ~actor_user_id
-    ~project_id ~community_id ~relation_id =
+let insert (module C : Caqti_lwt.CONNECTION) ~action ~actor_user_id ~project_id
+    ~community_id ~relation_id =
   let action_string = string_of_action action in
   if
     actor_user_id <= 0

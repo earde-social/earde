@@ -14,7 +14,6 @@
    id — so no third divergent read-authorization rule exists. *)
 
 open Lwt.Infix
-
 module Stp = Shared_thread_placements
 
 type destination_context = {
@@ -45,15 +44,13 @@ let addressable_slug value =
 let destination_context_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int string)
-   ->? Caqti_type.(t2 (t2 int (option string)) (t2 (option string) string)))
-  "SELECT d.id, ds.name, ds.slug, oc.name \
-   FROM shared_thread_placements stp \
-   JOIN communities d ON d.id = stp.destination_community_id \
-   JOIN communities oc ON oc.id = stp.origin_community_id \
-   LEFT JOIN community_sections ds ON ds.id = stp.destination_section_id \
-   WHERE stp.post_id = $1 AND d.slug = $2 \
-     AND stp.status = 'accepted' \
-     AND oc.visibility = 'public'"
+  ->? Caqti_type.(t2 (t2 int (option string)) (t2 (option string) string)))
+    "SELECT d.id, ds.name, ds.slug, oc.name FROM shared_thread_placements stp \
+     JOIN communities d ON d.id = stp.destination_community_id JOIN \
+     communities oc ON oc.id = stp.origin_community_id LEFT JOIN \
+     community_sections ds ON ds.id = stp.destination_section_id WHERE \
+     stp.post_id = $1 AND d.slug = $2 AND stp.status = 'accepted' AND \
+     oc.visibility = 'public'"
 
 let resolve_destination_context (module C : Caqti_lwt.CONNECTION) ~post_id
     ~destination_slug =
@@ -72,7 +69,8 @@ let resolve_destination_context (module C : Caqti_lwt.CONNECTION) ~post_id
         Lwt.return
           (Ok
              (Some
-                { destination_community_id = community_id;
+                {
+                  destination_community_id = community_id;
                   destination_section;
                   origin_community_name = origin_name;
                 }))
@@ -95,26 +93,26 @@ let resolve_destination_context (module C : Caqti_lwt.CONNECTION) ~post_id
 let public_destinations_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->* Caqti_type.(t3 int string string))
-    "SELECT stp.post_id, dc.slug, dc.name \
-     FROM shared_thread_placements stp \
-     JOIN communities dc ON dc.id = stp.destination_community_id \
-     JOIN communities oc ON oc.id = stp.origin_community_id \
-     WHERE stp.post_id = ANY(string_to_array($1, ',')::int[]) \
-       AND stp.status = 'accepted' \
-       AND dc.visibility = 'public' \
-       AND oc.visibility = 'public' \
-     ORDER BY stp.post_id, LOWER(dc.name), dc.slug"
+    "SELECT stp.post_id, dc.slug, dc.name FROM shared_thread_placements stp \
+     JOIN communities dc ON dc.id = stp.destination_community_id JOIN \
+     communities oc ON oc.id = stp.origin_community_id WHERE stp.post_id = \
+     ANY(string_to_array($1, ',')::int[]) AND stp.status = 'accepted' AND \
+     dc.visibility = 'public' AND oc.visibility = 'public' ORDER BY \
+     stp.post_id, LOWER(dc.name), dc.slug"
 
 let public_destinations_for_posts (module C : Caqti_lwt.CONNECTION) ~post_ids =
   match List.filter (fun id -> id > 0) post_ids with
   | [] -> Lwt.return (Ok [])
-  | ids ->
+  | ids -> (
       let csv = String.concat "," (List.map string_of_int ids) in
       C.collect_list public_destinations_query csv >>= function
       | Ok rows ->
           Lwt.return
-            (Ok (List.map (fun (post_id, slug, name) -> (post_id, (slug, name))) rows))
-      | Error _ -> Lwt.return (Error Storage_error)
+            (Ok
+               (List.map
+                  (fun (post_id, slug, name) -> (post_id, (slug, name)))
+                  rows))
+      | Error _ -> Lwt.return (Error Storage_error))
 
 (* The one comment-participation capability, spelled entirely in SQL so the
    composer gate and the POST /comments authorization cannot drift. A
@@ -143,32 +141,19 @@ let may_comment_query =
   in
   (Caqti_type.(t2 int int) ->! Caqti_type.bool)
     (Printf.sprintf
-       "SELECT EXISTS (\
-          SELECT 1 FROM posts p \
-          JOIN communities oc ON oc.id = p.community_id \
-          WHERE p.id = $1 \
-            AND (p.content IS NULL OR p.content NOT IN (%s)) \
-            AND NOT EXISTS (SELECT 1 FROM users gu \
-                            WHERE gu.id = $2 AND gu.is_banned) \
-            AND NOT EXISTS (SELECT 1 FROM community_bans ob \
-                            WHERE ob.user_id = $2 \
-                              AND ob.community_id = p.community_id) \
-            AND (EXISTS (SELECT 1 FROM community_members om \
-                         WHERE om.user_id = $2 \
-                           AND om.community_id = p.community_id) \
-                 OR EXISTS (\
-                      SELECT 1 FROM shared_thread_placements stp \
-                      JOIN community_members dm \
-                        ON dm.user_id = $2 \
-                       AND dm.community_id = stp.destination_community_id \
-                      WHERE stp.post_id = p.id \
-                        AND stp.status = 'accepted' \
-                        AND oc.visibility = 'public' \
-                        AND NOT EXISTS (\
-                              SELECT 1 FROM community_bans dbn \
-                              WHERE dbn.user_id = $2 \
-                                AND dbn.community_id = \
-                                    stp.destination_community_id))))"
+       "SELECT EXISTS (SELECT 1 FROM posts p JOIN communities oc ON oc.id = \
+        p.community_id WHERE p.id = $1 AND (p.content IS NULL OR p.content NOT \
+        IN (%s)) AND NOT EXISTS (SELECT 1 FROM users gu WHERE gu.id = $2 AND \
+        gu.is_banned) AND NOT EXISTS (SELECT 1 FROM community_bans ob WHERE \
+        ob.user_id = $2 AND ob.community_id = p.community_id) AND (EXISTS \
+        (SELECT 1 FROM community_members om WHERE om.user_id = $2 AND \
+        om.community_id = p.community_id) OR EXISTS (SELECT 1 FROM \
+        shared_thread_placements stp JOIN community_members dm ON dm.user_id = \
+        $2 AND dm.community_id = stp.destination_community_id WHERE \
+        stp.post_id = p.id AND stp.status = 'accepted' AND oc.visibility = \
+        'public' AND NOT EXISTS (SELECT 1 FROM community_bans dbn WHERE \
+        dbn.user_id = $2 AND dbn.community_id = \
+        stp.destination_community_id))))"
        tombstones)
 
 let viewer_may_comment (module C : Caqti_lwt.CONNECTION) ~user_id ~post_id =

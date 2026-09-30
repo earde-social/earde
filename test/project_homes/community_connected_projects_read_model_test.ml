@@ -19,13 +19,9 @@ module Phr = Earde.Project_home_relation
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Cp = Earde.Community_connected_projects_read_model
-
 module Rq = Earde.Project_home_request_store
-
 module Rvs = Earde.Project_home_review_store
-
 module Fin = Earde.Project_finalization_store
 
 let error_str : Cp.error -> string = function
@@ -40,11 +36,8 @@ let verification_str : Cp.verification -> string = function
   | Cp.Revoked -> "revoked"
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let insert_community = Community_fixture.insert_community
 
 (* Distinctive credential-shaped fixtures. None of these may ever reach a
@@ -55,20 +48,19 @@ let private_note = "ccpr private note ACCESS_TOKEN_gho_ccpr_secret"
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 946300001 AND 946300999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 946300001 AND 946300999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 946200001 AND 946200999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'ccpr-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ccpr_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 946200001 AND 946200999"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 946300001 \
+       AND 946300999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       946300001 AND 946300999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 946200001 AND 946200999)";
+      "DELETE FROM communities WHERE slug LIKE 'ccpr-%'";
+      "DELETE FROM users WHERE username LIKE 'ccpr_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       946200001 AND 946200999";
     ]
 
 (* An automatically provisioned accepted home: no requester and no reviewer,
@@ -77,34 +69,32 @@ let q_cleanup =
    test-only constructor. *)
 let q_provision_accepted =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "INSERT INTO community_projects \
-     (project_id, community_id, relation_type, status, reviewed_at) \
-   VALUES ($1, $2, 'home', 'accepted', NOW())"
+    "INSERT INTO community_projects (project_id, community_id, relation_type, \
+     status, reviewed_at) VALUES ($1, $2, 'home', 'accepted', NOW())"
 
 (* A historical removed relation — reviewed and removed, outside the
    one-active-home partial index, so it coexists with nothing active. *)
 let q_insert_removed =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "INSERT INTO community_projects \
-     (project_id, community_id, relation_type, status, reviewed_at, \
-      removed_at) \
-   VALUES ($1, $2, 'home', 'removed', NOW(), NOW())"
+    "INSERT INTO community_projects (project_id, community_id, relation_type, \
+     status, reviewed_at, removed_at) VALUES ($1, $2, 'home', 'removed', \
+     NOW(), NOW())"
 
 let q_insert_moderator =
   (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
-  "INSERT INTO community_moderators (user_id, community_id, role) \
-   VALUES ($1, $2, $3)"
+    "INSERT INTO community_moderators (user_id, community_id, role) VALUES \
+     ($1, $2, $3)"
 
 let q_delete_project =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM open_source_projects WHERE id = $1"
+    "DELETE FROM open_source_projects WHERE id = $1"
 
 (* Audit history deliberately blocks subject deletion (no cascade on
    project_home_audit_events); a case that deletes a project after real
    lifecycle events must purge its trail explicitly first. *)
 let q_delete_audit_trail =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM project_home_audit_events WHERE project_id = $1"
+    "DELETE FROM project_home_audit_events WHERE project_id = $1"
 
 (* Targeted durable corruption that the production CHECKs already admit:
    forge_namespace_login only constrains btrim/length, website_url only
@@ -112,74 +102,71 @@ let q_delete_audit_trail =
    only > 0 with a per-project uniqueness rule. *)
 let q_corrupt_login =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE open_source_projects \
-   SET forge_namespace_login = 'ccpr' || chr(1) || 'bad' WHERE id = $1"
+    "UPDATE open_source_projects SET forge_namespace_login = 'ccpr' || chr(1) \
+     || 'bad' WHERE id = $1"
 
 let q_restore_login =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE open_source_projects \
-   SET forge_namespace_login = 'pfin-owner' WHERE id = $1"
+    "UPDATE open_source_projects SET forge_namespace_login = 'pfin-owner' \
+     WHERE id = $1"
 
 let q_corrupt_name =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE open_source_projects \
-   SET name = 'ccpr' || chr(1) || 'bad' WHERE id = $1"
+    "UPDATE open_source_projects SET name = 'ccpr' || chr(1) || 'bad' WHERE id \
+     = $1"
 
 let q_set_name =
   (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
-  "UPDATE open_source_projects SET name = $2 WHERE id = $1"
+    "UPDATE open_source_projects SET name = $2 WHERE id = $1"
 
 let q_corrupt_website =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE open_source_projects \
-   SET website_url = 'javascript:alert(1)' WHERE id = $1"
+    "UPDATE open_source_projects SET website_url = 'javascript:alert(1)' WHERE \
+     id = $1"
 
 let q_clear_website =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE open_source_projects SET website_url = NULL WHERE id = $1"
+    "UPDATE open_source_projects SET website_url = NULL WHERE id = $1"
 
 let q_corrupt_repo_url =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_repositories \
-   SET html_url = 'https://evil.example/x' WHERE project_id = $1 \
-     AND position = 1"
+    "UPDATE project_repositories SET html_url = 'https://evil.example/x' WHERE \
+     project_id = $1 AND position = 1"
 
 let q_restore_repo_url =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_repositories \
-   SET html_url = 'https://github.com/pfin-owner/alpha' \
-   WHERE project_id = $1 AND position = 1"
+    "UPDATE project_repositories SET html_url = \
+     'https://github.com/pfin-owner/alpha' WHERE project_id = $1 AND position \
+     = 1"
 
 let q_break_positions =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_repositories SET position = 7 \
-   WHERE project_id = $1 AND position = 2"
+    "UPDATE project_repositories SET position = 7 WHERE project_id = $1 AND \
+     position = 2"
 
 let q_delete_repos =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM project_repositories WHERE project_id = $1"
+    "DELETE FROM project_repositories WHERE project_id = $1"
 
 let q_set_verification =
   (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
-  "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
+    "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
 
 let q_drop_full_name_key =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "ALTER TABLE project_repositories \
-   DROP CONSTRAINT project_repositories_project_full_name_key"
+    "ALTER TABLE project_repositories DROP CONSTRAINT \
+     project_repositories_project_full_name_key"
 
 let q_add_full_name_key =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "ALTER TABLE project_repositories \
-   ADD CONSTRAINT project_repositories_project_full_name_key \
-   UNIQUE (project_id, full_name)"
+    "ALTER TABLE project_repositories ADD CONSTRAINT \
+     project_repositories_project_full_name_key UNIQUE (project_id, full_name)"
 
 let q_duplicate_full_name =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_repositories \
-   SET full_name = 'pfin-owner/alpha', \
-       html_url = 'https://github.com/pfin-owner/alpha' \
-   WHERE project_id = $1 AND position = 2"
+    "UPDATE project_repositories SET full_name = 'pfin-owner/alpha', html_url \
+     = 'https://github.com/pfin-owner/alpha' WHERE project_id = $1 AND \
+     position = 2"
 
 (* Emptying search_path hides the unqualified tables, so the first query
    fails at the SQL layer and Caqti returns an Error the read model maps to
@@ -211,8 +198,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
    dropped for the whole case: these fixtures deliberately write drift
@@ -222,7 +208,8 @@ let db_case name f =
 let db_case_lifecycle_relaxed name f =
   db_case name (fun conn ->
       Network_community_lifecycle_constraint.around conn
-        ~cleanup:(fun () -> Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
+        ~cleanup:(fun () ->
+          Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
         (fun () -> f conn))
 
 (* === call helpers === *)
@@ -238,8 +225,7 @@ let load_ok label conn ~community =
 let load_expect label expected conn ~community =
   let* r = load conn ~community in
   match r with
-  | Ok _ ->
-      Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
   | Error e ->
       Alcotest.(check string) label (error_str expected) (error_str e);
       Lwt.return_unit
@@ -253,14 +239,16 @@ let check_slugs label expected projects =
 
 (* Verified permanent projects come only through the real chain — draft
    store, selection store, finalization store — never fixture INSERTs. *)
-let make_project ?kind ?name ?website ?(repos = [ "alpha" ]) conn ~user
-    ~ext_id ~slug =
+let make_project ?kind ?name ?website ?(repos = [ "alpha" ]) conn ~user ~ext_id
+    ~slug =
   let base = Int64.add ext_id 400000L in
   let* _inst, draft, _, _ =
     Project_fixture.make_draft conn ~user ~ext_id (fun account_id ->
         List.mapi
           (fun i n ->
-            Project_fixture.repo ~account_id ~id:(Int64.add base (Int64.of_int i)) n)
+            Project_fixture.repo ~account_id
+              ~id:(Int64.add base (Int64.of_int i))
+              n)
           repos)
   in
   let* ids = Project_fixture.snapshot_ids conn draft in
@@ -269,16 +257,23 @@ let make_project ?kind ?name ?website ?(repos = [ "alpha" ]) conn ~user
     Project_fixture.replace_ok "seed selection" conn ~user ~draft ~primary ids
   in
   let identity =
-    Project_fixture.identity_exn ?kind ?name ~slug ?website ~selected:ids ~primary ()
+    Project_fixture.identity_exn ?kind ?name ~slug ?website ~selected:ids
+      ~primary ()
   in
-  let* created = Project_fixture.finalize_ok "fixture project" conn ~user ~draft identity in
+  let* created =
+    Project_fixture.finalize_ok "fixture project" conn ~user ~draft identity
+  in
   Lwt.return (Fin.project_id created)
 
 let add_top_mod conn ~user ~community =
   exec conn "top_mod fixture" q_insert_moderator (user, community, "top_mod")
 
-let request_pending label conn ~user ~slug ~community ?(note = private_note) () =
-  let relation = Home_request_fixture.phr_expect_ok (Phr.create_pending ~request_note:(Some note)) in
+let request_pending label conn ~user ~slug ~community ?(note = private_note) ()
+    =
+  let relation =
+    Home_request_fixture.phr_expect_ok
+      (Phr.create_pending ~request_note:(Some note))
+  in
   let* r =
     Rq.create conn ~user_id:user ~project_slug:slug
       ~target_community_id:community ~relation
@@ -322,22 +317,24 @@ let pure_inputs_case =
         (fun bad ->
           load_expect "invalid community slug" Cp.Invalid_community_slug dead
             ~community:bad)
-        [ ""
-        ; "ccpr c"
-        ; " ccpr-c"
-        ; "ccpr-c "
-        ; "ccpr/c"
-        ; "ccpr\tc"
-        ; "ccpr\nc"
-        ; "ccpr\x01c"
-        ; "ccpr\x7fc"
+        [
+          "";
+          "ccpr c";
+          " ccpr-c";
+          "ccpr-c ";
+          "ccpr/c";
+          "ccpr\tc";
+          "ccpr\nc";
+          "ccpr\x01c";
+          "ccpr\x7fc";
         ])
 
 (* === community existence === *)
 
 let missing_community_case =
-  db_case "connected projects: a community that does not exist is \
-           Community_unavailable; an existing one with no relations is empty"
+  db_case
+    "connected projects: a community that does not exist is \
+     Community_unavailable; an existing one with no relations is empty"
     (fun conn ->
       let* () =
         load_expect "missing" Cp.Community_unavailable conn
@@ -353,9 +350,9 @@ let missing_community_case =
 (* === accepted relation selection === *)
 
 let reviewed_accept_case =
-  db_case "connected projects: one moderator-reviewed accepted home is \
-           visible in full, carrying no requester, reviewer, or note"
-    (fun conn ->
+  db_case
+    "connected projects: one moderator-reviewed accepted home is visible in \
+     full, carrying no requester, reviewer, or note" (fun conn ->
       let* owner = insert_user conn "ccpr_owner" in
       let* moderator = insert_user conn "ccpr_mod" in
       let* _project =
@@ -373,50 +370,61 @@ let reviewed_accept_case =
       let p = List.hd projects in
       Alcotest.(check string) "name" "Ccpr Reviewed" (Cp.project_name p);
       Alcotest.(check string) "slug" "ccpr-rev" (Cp.project_slug p);
-      Alcotest.(check string) "verification" "verified"
+      Alcotest.(check string)
+        "verification" "verified"
         (verification_str (Cp.project_verification p));
-      Alcotest.(check string) "namespace" "pfin-owner"
+      Alcotest.(check string)
+        "namespace" "pfin-owner"
         (Cp.project_namespace_login p);
-      Alcotest.(check (option string)) "website"
-        (Some "https://reviewed.example/") (Cp.project_website_url p);
+      Alcotest.(check (option string))
+        "website" (Some "https://reviewed.example/") (Cp.project_website_url p);
       let repos = Cp.project_repositories p in
       Alcotest.(check int) "one repository" 1 (List.length repos);
-      Alcotest.(check string) "repository full name" "pfin-owner/alpha"
+      Alcotest.(check string)
+        "repository full name" "pfin-owner/alpha"
         (Cp.repository_full_name (List.hd repos));
-      Alcotest.(check string) "repository url"
-        "https://github.com/pfin-owner/alpha"
+      Alcotest.(check string)
+        "repository url" "https://github.com/pfin-owner/alpha"
         (Cp.repository_html_url (List.hd repos));
-      Alcotest.(check bool) "repository primary" true
+      Alcotest.(check bool)
+        "repository primary" true
         (Cp.repository_is_primary (List.hd repos));
-      Alcotest.(check bool) "repository archived" false
+      Alcotest.(check bool)
+        "repository archived" false
         (Cp.repository_is_archived (List.hd repos));
       (* Nothing private or provenance-shaped can be reached through the
          public API: boolean only, so no fixture byte is printed. *)
       let exposed =
         String.concat "\n"
-          ([ Cp.project_name p; Cp.project_slug p;
+          ([
+             Cp.project_name p;
+             Cp.project_slug p;
              Cp.project_namespace_login p;
-             Option.value ~default:"" (Cp.project_website_url p) ]
+             Option.value ~default:"" (Cp.project_website_url p);
+           ]
           @ List.concat_map
               (fun r -> [ Cp.repository_full_name r; Cp.repository_html_url r ])
               repos)
       in
       List.iter
         (fun (label, needle) ->
-          Alcotest.(check bool) label false (Html_assert.contains exposed needle))
-        [ ("no private note", private_note)
-        ; ("no requester name", "ccpr_owner")
-        ; ("no reviewer name", "ccpr_mod")
-        ; ("no external installation id", "946200001")
-        ; ("no external account id", "946300001")
-        ; ("no external repository id", "946600001")
+          Alcotest.(check bool)
+            label false
+            (Html_assert.contains exposed needle))
+        [
+          ("no private note", private_note);
+          ("no requester name", "ccpr_owner");
+          ("no reviewer name", "ccpr_mod");
+          ("no external installation id", "946200001");
+          ("no external account id", "946300001");
+          ("no external repository id", "946600001");
         ];
       Lwt.return_unit)
 
 let provisioned_accept_case =
-  db_case "connected projects: a provisioned accepted home with NULL \
-           requester and reviewer appears exactly like a reviewed one"
-    (fun conn ->
+  db_case
+    "connected projects: a provisioned accepted home with NULL requester and \
+     reviewer appears exactly like a reviewed one" (fun conn ->
       let* owner = insert_user conn "ccpr_prov_owner" in
       let* project =
         make_project conn ~user:owner ~ext_id:946200002L ~slug:"ccpr-prov"
@@ -428,16 +436,18 @@ let provisioned_accept_case =
       in
       let* projects = load_ok "provisioned" conn ~community:"ccpr-prov-home" in
       check_slugs "provisioned visible" [ "ccpr-prov" ] projects;
-      Alcotest.(check string) "verification" "verified"
+      Alcotest.(check string)
+        "verification" "verified"
         (verification_str (Cp.project_verification (List.hd projects)));
-      Alcotest.(check (option string)) "no website" None
+      Alcotest.(check (option string))
+        "no website" None
         (Cp.project_website_url (List.hd projects));
       Lwt.return_unit)
 
 let excluded_statuses_case =
-  db_case "connected projects: pending, rejected and removed relations are \
-           all excluded"
-    (fun conn ->
+  db_case
+    "connected projects: pending, rejected and removed relations are all \
+     excluded" (fun conn ->
       let* owner = insert_user conn "ccpr_ex_owner" in
       let* moderator = insert_user conn "ccpr_ex_mod" in
       let* _pending =
@@ -482,9 +492,9 @@ let excluded_statuses_case =
 (* === ordering === *)
 
 let ordering_case =
-  db_case "connected projects: deterministic lower(name), slug, id order — \
-           never acceptance time"
-    (fun conn ->
+  db_case
+    "connected projects: deterministic lower(name), slug, id order — never \
+     acceptance time" (fun conn ->
       let* owner = insert_user conn "ccpr_ord_owner" in
       let* moderator = insert_user conn "ccpr_ord_mod" in
       let* cid = insert_community conn "ccpr-ord-home" in
@@ -504,25 +514,26 @@ let ordering_case =
           ~name:"middle tool"
       in
       let* () =
-        accept_reviewed "z" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-ord-z" ~cid ~community_slug:"ccpr-ord-home"
+        accept_reviewed "z" conn ~owner ~reviewer:moderator ~slug:"ccpr-ord-z"
+          ~cid ~community_slug:"ccpr-ord-home"
       in
       let* () =
-        accept_reviewed "a" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-ord-a" ~cid ~community_slug:"ccpr-ord-home"
+        accept_reviewed "a" conn ~owner ~reviewer:moderator ~slug:"ccpr-ord-a"
+          ~cid ~community_slug:"ccpr-ord-home"
       in
       let* () =
-        accept_reviewed "m" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-ord-m" ~cid ~community_slug:"ccpr-ord-home"
+        accept_reviewed "m" conn ~owner ~reviewer:moderator ~slug:"ccpr-ord-m"
+          ~cid ~community_slug:"ccpr-ord-home"
       in
       let* projects = load_ok "ordering" conn ~community:"ccpr-ord-home" in
       check_slugs "lower(name) order, not acceptance order"
-        [ "ccpr-ord-a"; "ccpr-ord-m"; "ccpr-ord-z" ] projects;
+        [ "ccpr-ord-a"; "ccpr-ord-m"; "ccpr-ord-z" ]
+        projects;
       Lwt.return_unit)
 
 let name_tiebreak_case =
-  db_case "connected projects: identical names fall through to the slug \
-           tiebreaker"
+  db_case
+    "connected projects: identical names fall through to the slug tiebreaker"
     (fun conn ->
       let* owner = insert_user conn "ccpr_tie_owner" in
       let* moderator = insert_user conn "ccpr_tie_mod" in
@@ -537,12 +548,12 @@ let name_tiebreak_case =
           ~name:"Same Name"
       in
       let* () =
-        accept_reviewed "b" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-tie-b" ~cid ~community_slug:"ccpr-tie-home"
+        accept_reviewed "b" conn ~owner ~reviewer:moderator ~slug:"ccpr-tie-b"
+          ~cid ~community_slug:"ccpr-tie-home"
       in
       let* () =
-        accept_reviewed "a" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-tie-a" ~cid ~community_slug:"ccpr-tie-home"
+        accept_reviewed "a" conn ~owner ~reviewer:moderator ~slug:"ccpr-tie-a"
+          ~cid ~community_slug:"ccpr-tie-home"
       in
       let* projects = load_ok "tiebreak" conn ~community:"ccpr-tie-home" in
       check_slugs "slug tiebreaker" [ "ccpr-tie-a"; "ccpr-tie-b" ] projects;
@@ -565,19 +576,21 @@ let repository_order_case =
       in
       let* projects = load_ok "repos" conn ~community:"ccpr-repos-home" in
       let repos = Cp.project_repositories (List.hd projects) in
-      Alcotest.(check (list string)) "position order"
+      Alcotest.(check (list string))
+        "position order"
         [ "pfin-owner/alpha"; "pfin-owner/beta"; "pfin-owner/gamma" ]
         (List.map Cp.repository_full_name repos);
-      Alcotest.(check int) "exactly one primary" 1
+      Alcotest.(check int)
+        "exactly one primary" 1
         (List.length (List.filter Cp.repository_is_primary repos));
       Lwt.return_unit)
 
 (* === lifecycle === *)
 
 let verification_mapping_case =
-  db_case "connected projects: verified, stale and revoked all stay visible \
-           and map exactly"
-    (fun conn ->
+  db_case
+    "connected projects: verified, stale and revoked all stay visible and map \
+     exactly" (fun conn ->
       let* owner = insert_user conn "ccpr_ver_owner" in
       let* moderator = insert_user conn "ccpr_ver_mod" in
       let* project =
@@ -586,8 +599,8 @@ let verification_mapping_case =
       let* cid = insert_community conn "ccpr-ver-home" in
       let* () = add_top_mod conn ~user:moderator ~community:cid in
       let* () =
-        accept_reviewed "ver" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-ver" ~cid ~community_slug:"ccpr-ver-home"
+        accept_reviewed "ver" conn ~owner ~reviewer:moderator ~slug:"ccpr-ver"
+          ~cid ~community_slug:"ccpr-ver-home"
       in
       Lwt_list.iter_s
         (fun (stored, expected) ->
@@ -595,17 +608,19 @@ let verification_mapping_case =
             exec conn "set verification" q_set_verification (project, stored)
           in
           let* projects = load_ok stored conn ~community:"ccpr-ver-home" in
-          Alcotest.(check int) (stored ^ ": still visible") 1
-            (List.length projects);
-          Alcotest.(check string) (stored ^ ": mapping") expected
+          Alcotest.(check int)
+            (stored ^ ": still visible")
+            1 (List.length projects);
+          Alcotest.(check string)
+            (stored ^ ": mapping") expected
             (verification_str (Cp.project_verification (List.hd projects)));
           Lwt.return_unit)
         [ ("verified", "verified"); ("stale", "stale"); ("revoked", "revoked") ])
 
 let community_drift_case =
-  db_case_lifecycle_relaxed "connected projects: public, unlisted and drifted (private, draft, \
-           legacy) target communities all keep the accepted relation"
-    (fun conn ->
+  db_case_lifecycle_relaxed
+    "connected projects: public, unlisted and drifted (private, draft, legacy) \
+     target communities all keep the accepted relation" (fun conn ->
       let* owner = insert_user conn "ccpr_drift_owner" in
       let* moderator = insert_user conn "ccpr_drift_mod" in
       let* _project =
@@ -634,8 +649,7 @@ let community_drift_case =
       expect_visible "legacy drift")
 
 let cascade_case =
-  db_case "connected projects: deleting the project cascades the relation \
-           away"
+  db_case "connected projects: deleting the project cascades the relation away"
     (fun conn ->
       let* owner = insert_user conn "ccpr_casc_owner" in
       let* moderator = insert_user conn "ccpr_casc_mod" in
@@ -645,16 +659,14 @@ let cascade_case =
       let* cid = insert_community conn "ccpr-casc-home" in
       let* () = add_top_mod conn ~user:moderator ~community:cid in
       let* () =
-        accept_reviewed "casc" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-casc" ~cid ~community_slug:"ccpr-casc-home"
+        accept_reviewed "casc" conn ~owner ~reviewer:moderator ~slug:"ccpr-casc"
+          ~cid ~community_slug:"ccpr-casc-home"
       in
       let* before = load_ok "before" conn ~community:"ccpr-casc-home" in
       Alcotest.(check int) "connected before delete" 1 (List.length before);
       (* The lifecycle audit trail RESTRICT-protects the project row; the
          explicit purge here is the deliberate step the FK now demands. *)
-      let* () =
-        exec conn "purge audit trail" q_delete_audit_trail project
-      in
+      let* () = exec conn "purge audit trail" q_delete_audit_trail project in
       let* () = exec conn "delete project" q_delete_project project in
       let* after = load_ok "after" conn ~community:"ccpr-casc-home" in
       Alcotest.(check int) "gone after delete" 0 (List.length after);
@@ -663,10 +675,10 @@ let cascade_case =
 (* === website === *)
 
 let website_case =
-  db_case "connected projects: an absent website is None, a present one is \
-           byte-preserved, and one outside the permanent grammar is \
-           Inconsistent_data"
-    (fun conn ->
+  db_case
+    "connected projects: an absent website is None, a present one is \
+     byte-preserved, and one outside the permanent grammar is \
+     Inconsistent_data" (fun conn ->
       let* owner = insert_user conn "ccpr_web_owner" in
       let* moderator = insert_user conn "ccpr_web_mod" in
       let* project =
@@ -680,12 +692,13 @@ let website_case =
           ~cid ~community_slug:"ccpr-web-home"
       in
       let* projects = load_ok "website" conn ~community:"ccpr-web-home" in
-      Alcotest.(check (option string)) "byte-preserved"
-        (Some "https://example.test/path?q=1#frag")
+      Alcotest.(check (option string))
+        "byte-preserved" (Some "https://example.test/path?q=1#frag")
         (Cp.project_website_url (List.hd projects));
       let* () = exec conn "clear website" q_clear_website project in
       let* projects = load_ok "no website" conn ~community:"ccpr-web-home" in
-      Alcotest.(check (option string)) "absent" None
+      Alcotest.(check (option string))
+        "absent" None
         (Cp.project_website_url (List.hd projects));
       let* () = exec conn "corrupt website" q_corrupt_website project in
       load_expect "non-http website" Cp.Inconsistent_data conn
@@ -694,9 +707,9 @@ let website_case =
 (* === durable corruption === *)
 
 let identity_corruption_case =
-  db_case "connected projects: malformed project identity is \
-           Inconsistent_data, never a silently dropped project"
-    (fun conn ->
+  db_case
+    "connected projects: malformed project identity is Inconsistent_data, \
+     never a silently dropped project" (fun conn ->
       let* owner = insert_user conn "ccpr_corr_owner" in
       let* moderator = insert_user conn "ccpr_corr_mod" in
       let* project =
@@ -706,13 +719,13 @@ let identity_corruption_case =
       let* cid = insert_community conn "ccpr-corr-home" in
       let* () = add_top_mod conn ~user:moderator ~community:cid in
       let* () =
-        accept_reviewed "corr" conn ~owner ~reviewer:moderator
-          ~slug:"ccpr-corr" ~cid ~community_slug:"ccpr-corr-home"
+        accept_reviewed "corr" conn ~owner ~reviewer:moderator ~slug:"ccpr-corr"
+          ~cid ~community_slug:"ccpr-corr-home"
       in
       let* () = exec conn "corrupt login" q_corrupt_login project in
       let* () =
-        load_expect "control byte in namespace login" Cp.Inconsistent_data
-          conn ~community:"ccpr-corr-home"
+        load_expect "control byte in namespace login" Cp.Inconsistent_data conn
+          ~community:"ccpr-corr-home"
       in
       let* () = exec conn "restore login" q_restore_login project in
       let* () = exec conn "corrupt name" q_corrupt_name project in
@@ -726,9 +739,9 @@ let identity_corruption_case =
       Lwt.return_unit)
 
 let repository_corruption_case =
-  db_case "connected projects: a malformed or missing repository set fails \
-           the whole read"
-    (fun conn ->
+  db_case
+    "connected projects: a malformed or missing repository set fails the whole \
+     read" (fun conn ->
       let* owner = insert_user conn "ccpr_rc_owner" in
       let* moderator = insert_user conn "ccpr_rc_mod" in
       let* project =
@@ -760,9 +773,9 @@ let repository_corruption_case =
    unreachable from data alone, so the constraint is dropped and restored
    around the assertion; Lwt.finalize restores it even if the check fails. *)
 let duplicate_repository_case =
-  db_case "connected projects: duplicate repository full names within one \
-           project are Inconsistent_data"
-    (fun conn ->
+  db_case
+    "connected projects: duplicate repository full names within one project \
+     are Inconsistent_data" (fun conn ->
       let* owner = insert_user conn "ccpr_dup_owner" in
       let* moderator = insert_user conn "ccpr_dup_mod" in
       let* project =
@@ -781,8 +794,8 @@ let duplicate_repository_case =
           let* () =
             exec conn "duplicate full name" q_duplicate_full_name project
           in
-          load_expect "duplicate repository full name" Cp.Inconsistent_data
-            conn ~community:"ccpr-dup-home")
+          load_expect "duplicate repository full name" Cp.Inconsistent_data conn
+            ~community:"ccpr-dup-home")
         (fun () ->
           (* Remove the duplicate before restoring the unique constraint. *)
           let* () = exec conn "delete repos" q_delete_repos project in
@@ -792,9 +805,9 @@ let duplicate_repository_case =
    the off-enum branch needs the constraint lifted for the length of one
    assertion. *)
 let malformed_status_case =
-  db_case "connected projects: an off-enum project verification status is \
-           Inconsistent_data"
-    (fun conn ->
+  db_case
+    "connected projects: an off-enum project verification status is \
+     Inconsistent_data" (fun conn ->
       let* owner = insert_user conn "ccpr_st_owner" in
       let* moderator = insert_user conn "ccpr_st_mod" in
       let* project =
@@ -806,7 +819,10 @@ let malformed_status_case =
         accept_reviewed "st" conn ~owner ~reviewer:moderator ~slug:"ccpr-st"
           ~cid ~community_slug:"ccpr-st-home"
       in
-      let* () = exec conn "drop verification check" Connected_projects_fixture.q_drop_verification_check () in
+      let* () =
+        exec conn "drop verification check"
+          Connected_projects_fixture.q_drop_verification_check ()
+      in
       Lwt.finalize
         (fun () ->
           let* () =
@@ -818,7 +834,8 @@ let malformed_status_case =
           let* () =
             exec conn "restore status" q_set_verification (project, "verified")
           in
-          exec conn "restore verification check" Connected_projects_fixture.q_add_verification_check ()))
+          exec conn "restore verification check"
+            Connected_projects_fixture.q_add_verification_check ()))
 
 let storage_error_case =
   db_case "connected projects: storage failure surfaces as Storage_error"
@@ -831,18 +848,30 @@ let storage_error_case =
       exec conn "reset search_path" q_reset_search_path ())
 
 let suite =
-  [ pure_inputs_case; missing_community_case; reviewed_accept_case;
-    provisioned_accept_case; excluded_statuses_case; ordering_case;
-    name_tiebreak_case; repository_order_case; verification_mapping_case;
-    community_drift_case; cascade_case; website_case;
-    identity_corruption_case; repository_corruption_case;
-    duplicate_repository_case; malformed_status_case; storage_error_case ]
+  [
+    pure_inputs_case;
+    missing_community_case;
+    reviewed_accept_case;
+    provisioned_accept_case;
+    excluded_statuses_case;
+    ordering_case;
+    name_tiebreak_case;
+    repository_order_case;
+    verification_mapping_case;
+    community_drift_case;
+    cascade_case;
+    website_case;
+    identity_corruption_case;
+    repository_corruption_case;
+    duplicate_repository_case;
+    malformed_status_case;
+    storage_error_case;
+  ]
 
 let suites =
-    (* Community connected-projects read model: slug validation, community
+  (* Community connected-projects read model: slug validation, community
        existence, accepted-relation selection across provisioned and
        reviewed homes, deterministic ordering, verification mapping,
        lifecycle drift, and project/repository/website validation.
        Database-gated. *)
-  [ ("community_connected_projects_read_model", suite)
-  ]
+  [ ("community_connected_projects_read_model", suite) ]

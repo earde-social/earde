@@ -2,16 +2,20 @@
    EARDE_TEST_DATABASE_URL, plus plain user rows. *)
 
 let ( let* ) = Lwt.bind
+
 open Caqti_request.Infix
 
 let returning_ids_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM comments WHERE content LIKE 'step3ret %'"
-    ; "DELETE FROM posts WHERE title LIKE 'step3ret %'"
-    ; "DELETE FROM communities WHERE slug = 'step3ret-c'"
-    ; "DELETE FROM users WHERE username IN ('step3ret_author', 'step3ret_confirmed', 'step3ret_taken')"
-    ; "DELETE FROM pending_signups WHERE username IN ('step3ret_confirmed', 'step3ret_taken', 'step3ret_expired')"
+    [
+      "DELETE FROM comments WHERE content LIKE 'step3ret %'";
+      "DELETE FROM posts WHERE title LIKE 'step3ret %'";
+      "DELETE FROM communities WHERE slug = 'step3ret-c'";
+      "DELETE FROM users WHERE username IN ('step3ret_author', \
+       'step3ret_confirmed', 'step3ret_taken')";
+      "DELETE FROM pending_signups WHERE username IN ('step3ret_confirmed', \
+       'step3ret_taken', 'step3ret_expired')";
     ]
 
 let reject label = function
@@ -21,8 +25,8 @@ let reject label = function
 (* Guards the audit against passing vacuously on a missing table. *)
 let q_column_count =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM information_schema.columns
-   WHERE table_schema = 'public' AND table_name = $1"
+    "SELECT COUNT(*) FROM information_schema.columns\n\
+    \   WHERE table_schema = 'public' AND table_name = $1"
 
 let or_fail label = function
   | Ok v -> Lwt.return v
@@ -48,13 +52,12 @@ let returning_ids_db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 let insert_user conn username =
   let (module C : Caqti_lwt.CONNECTION) = conn in

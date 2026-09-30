@@ -81,9 +81,7 @@ let start handler =
 
 (* Dummy credential values only — never real ones. *)
 let deletion_test_key = "phx_test_dummy"
-
 let stub_uuid = "11111111-2222-3333-4444-555555555555"
-
 let person_json uuid = Printf.sprintf {|{"id": %S, "properties": {}}|} uuid
 
 let results_body persons =

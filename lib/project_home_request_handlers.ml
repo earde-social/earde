@@ -45,7 +45,8 @@ let authenticated_user_id request =
    origin-gated routes, and a no-referrer document makes the browser send
    Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -54,7 +55,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -103,8 +105,8 @@ let unavailable_page request =
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 (* The PRG destination is this same permanent route, rebuilt structurally
    from the canonical route slug — never by reflecting other request
@@ -200,8 +202,8 @@ let state_of_view ~request_note view =
    concurrent relation suppresses the form, newly ineligible targets drop
    out of the chooser, and visibility labels stay current. The live
    request crosses so a rendered form carries a fresh Dream CSRF field. *)
-let respond_current_state request ~user_id ~slug ~request_note ~feedback
-    ~status =
+let respond_current_state request ~user_id ~slug ~request_note ~feedback ~status
+    =
   let%lwt loaded =
     Dream.sql request (fun db ->
         Read.load_for_steward db ~user_id ~project_slug:slug)
@@ -220,8 +222,7 @@ let respond_current_state request ~user_id ~slug ~request_note ~feedback
       | Error () -> server_error_page request
       | Ok state ->
           Dream.respond ~status ~headers:page_headers
-            (Pages_phc.project_home_choice_page
-               ?user:(session_user request)
+            (Pages_phc.project_home_choice_page ?user:(session_user request)
                ~request ~state ~feedback ()))
 
 (* --- GET /projects/:slug/request-home --- *)
@@ -234,11 +235,11 @@ let make_project_home_choice_handler ~mode request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Lwt.return (login_redirect ())
-      | Some user_id ->
+      | Some user_id -> (
           let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             Lwt.return (bring_redirect ())
-          else (
+          else
             match route_slug request with
             | None -> not_found_page request
             | Some slug ->
@@ -283,8 +284,8 @@ let handle_store_result request ~user_id ~slug ~submitted_note = function
          one generic 404. *)
       not_found_page request
   | Error
-      (Store.Invalid_user_id | Store.Invalid_community_id
-      | Store.Invalid_relation) ->
+      ( Store.Invalid_user_id | Store.Invalid_community_id
+      | Store.Invalid_relation ) ->
       (* Defensive: all three were validated before the store ran. *)
       server_error_page request
   | Error Store.Community_unavailable ->
@@ -334,20 +335,20 @@ let make_project_home_request_handler ~mode ~load_config request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Lwt.return (login_redirect ())
-      | Some user_id ->
+      | Some user_id -> (
           let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             Lwt.return (bring_redirect ())
-          else (
+          else
             match route_slug request with
             | None -> not_found_page request
             | Some slug -> (
                 match load_config () with
                 | Error _ -> unavailable_page request
-                | Ok config ->
+                | Ok config -> (
                     if not (Request_origin.same_origin_request config request)
                     then forbidden_page request
-                    else (
+                    else
                       (* Dream's form API enforces the URL-encoded content
                          type and verifies its own CSRF field, which it
                          strips from the returned fields — so the strict
@@ -386,4 +387,5 @@ let make_project_home_request_handler ~mode ~load_config request =
                                 ~feedback:(Some Pages_phc.Request_form_invalid)
                                 ~status:`Bad_Request
                           | Ok form ->
-                              handle_parsed_form request ~user_id ~slug form)))))
+                              handle_parsed_form request ~user_id ~slug form))))
+      )

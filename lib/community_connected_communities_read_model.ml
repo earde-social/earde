@@ -13,7 +13,6 @@
    the .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Cc = Community_connections
 
 type connected_community = { name : string; slug : string }
@@ -42,7 +41,8 @@ let valid_slug value =
    something to render. *)
 let valid_name value =
   String.length value > 0
-  && String.exists (fun c -> c <> ' ' && c <> '\t' && c <> '\n' && c <> '\r')
+  && String.exists
+       (fun c -> c <> ' ' && c <> '\t' && c <> '\n' && c <> '\r')
        value
   && String.for_all
        (fun byte -> Char.code byte >= 0x20 && Char.code byte <> 0x7f)
@@ -55,10 +55,9 @@ let valid_name value =
 let viewed_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.string
-   ->? Caqti_type.(t2 (t2 int string) (t2 (t2 string string) bool)))
-  "SELECT id, slug, visibility, onboarding_state, discoverable \
-   FROM communities \
-   WHERE slug = $1"
+  ->? Caqti_type.(t2 (t2 int string) (t2 (t2 string string) bool)))
+    "SELECT id, slug, visibility, onboarding_state, discoverable FROM \
+     communities WHERE slug = $1"
 
 (* Every accepted counterpart of one community, from either side. The CASE is
    what makes the read symmetric: the same durable row yields the other
@@ -67,17 +66,14 @@ let viewed_community_query =
 let counterparts_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->* Caqti_type.(t2 (t2 int string) (t2 (t2 string string) (t2 string bool))))
-  "SELECT other.id, other.slug, other.name, other.visibility, \
-          other.onboarding_state, other.discoverable \
-   FROM community_connections cc \
-   JOIN communities other \
-     ON other.id = CASE WHEN cc.requester_community_id = $1 \
-                        THEN cc.recipient_community_id \
-                        ELSE cc.requester_community_id END \
-   WHERE cc.status = 'accepted' \
-     AND (cc.requester_community_id = $1 OR cc.recipient_community_id = $1) \
-   ORDER BY lower(other.name), other.slug, other.id"
+  ->* Caqti_type.(t2 (t2 int string) (t2 (t2 string string) (t2 string bool))))
+    "SELECT other.id, other.slug, other.name, other.visibility, \
+     other.onboarding_state, other.discoverable FROM community_connections cc \
+     JOIN communities other ON other.id = CASE WHEN cc.requester_community_id \
+     = $1 THEN cc.recipient_community_id ELSE cc.requester_community_id END \
+     WHERE cc.status = 'accepted' AND (cc.requester_community_id = $1 OR \
+     cc.recipient_community_id = $1) ORDER BY lower(other.name), other.slug, \
+     other.id"
 
 (* One durable row's eligibility, through the single shared predicate. An
    off-enum stored value is corruption, never a quietly ineligible row. *)
@@ -99,12 +95,13 @@ let load_for_community (module C : Caqti_lwt.CONNECTION) ~community_slug =
     | Ok None -> Lwt.return (Error Community_unavailable)
     | Ok
         (Some
-          ((viewed_id, stored_slug), ((visibility_raw, onboarding_raw), discoverable)))
-      -> (
-        (* The stored slug must be byte-identical to the supplied one: a
+           ( (viewed_id, stored_slug),
+             ((visibility_raw, onboarding_raw), discoverable) )) -> (
+        if
+          (* The stored slug must be byte-identical to the supplied one: a
            lookup that matched on anything else is corruption, not a hit. *)
-        if viewed_id <= 0 || not (String.equal stored_slug community_slug) then
-          Lwt.return (Error Inconsistent_data)
+          viewed_id <= 0 || not (String.equal stored_slug community_slug)
+        then Lwt.return (Error Inconsistent_data)
         else
           match eligibility ~visibility_raw ~onboarding_raw ~discoverable with
           | None -> Lwt.return (Error Inconsistent_data)
@@ -123,15 +120,16 @@ let load_for_community (module C : Caqti_lwt.CONNECTION) ~community_slug =
                      filter. *)
                   let rec collect seen acc = function
                     | [] -> Ok (List.rev acc)
-                    | ((other_id, other_slug), ((other_name, vis_raw), (onb_raw, disc)))
-                      :: rest ->
+                    | ( (other_id, other_slug),
+                        ((other_name, vis_raw), (onb_raw, disc)) )
+                      :: rest -> (
                         if
                           other_id <= 0 || other_id = viewed_id
                           || List.mem other_id seen
-                          || not (valid_slug other_slug)
+                          || (not (valid_slug other_slug))
                           || not (valid_name other_name)
                         then Error Inconsistent_data
-                        else (
+                        else
                           match
                             eligibility ~visibility_raw:vis_raw
                               ~onboarding_raw:onb_raw ~discoverable:disc
@@ -140,7 +138,8 @@ let load_for_community (module C : Caqti_lwt.CONNECTION) ~community_slug =
                           | Some eligible ->
                               let acc =
                                 if eligible then
-                                  { name = other_name; slug = other_slug } :: acc
+                                  { name = other_name; slug = other_slug }
+                                  :: acc
                                 else acc
                               in
                               collect (other_id :: seen) acc rest)

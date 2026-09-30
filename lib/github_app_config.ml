@@ -43,8 +43,7 @@ let string_of_error = function
   | Missing f -> string_of_field f ^ " is not set"
   | Invalid f -> string_of_field f ^ " is invalid"
   | Origin_mismatch f ->
-      string_of_field f ^ " does not match the " ^ public_origin_env
-      ^ " origin"
+      string_of_field f ^ " does not match the " ^ public_origin_env ^ " origin"
   | Unexpected_path f -> string_of_field f ^ " has an unexpected path"
 
 let public_origin t = t.public_origin
@@ -52,7 +51,6 @@ let app_slug t = t.app_slug
 let client_id t = t.client_id
 let setup_url t = t.setup_url
 let callback_url t = t.callback_url
-
 let ( let* ) = Result.bind
 
 (* Unset and set-but-blank are distinct operator mistakes; keep them
@@ -69,7 +67,9 @@ let required field value =
 type origin = { scheme : string; host : string; port : int option }
 
 let default_port = function "https" -> 443 | _ -> 80
-let effective_port o = match o.port with Some p -> p | None -> default_port o.scheme
+
+let effective_port o =
+  match o.port with Some p -> p | None -> default_port o.scheme
 
 let same_origin a b =
   String.equal a.scheme b.scheme
@@ -83,7 +83,9 @@ let is_loopback_host = function
 (* Canonical form: no trailing slash, no default port, IPv6 hosts
    re-bracketed (Uri.host strips the brackets). *)
 let origin_to_string o =
-  let host = if String.contains o.host ':' then "[" ^ o.host ^ "]" else o.host in
+  let host =
+    if String.contains o.host ':' then "[" ^ o.host ^ "]" else o.host
+  in
   let port =
     match o.port with
     | Some p when p <> default_port o.scheme -> ":" ^ string_of_int p
@@ -134,7 +136,9 @@ let validate_public_origin raw =
    redirect_uri can be emitted verbatim and never points off-site. *)
 let validate_registered_url field ~public ~path:expected raw =
   let* origin, path = parse_http_url field raw in
-  let* () = if same_origin origin public then Ok () else Error (Origin_mismatch field) in
+  let* () =
+    if same_origin origin public then Ok () else Error (Origin_mismatch field)
+  in
   if String.equal path expected then Ok (origin_to_string public ^ expected)
   else Error (Unexpected_path field)
 

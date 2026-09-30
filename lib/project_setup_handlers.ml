@@ -41,7 +41,8 @@ let authenticated_user_id request =
    origin-gated routes, and a no-referrer document makes the browser send
    Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store");
+  [
+    ("Cache-Control", "no-store");
     ("Referrer-Policy", Request_origin.referrer_policy);
   ]
 
@@ -50,7 +51,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -217,8 +219,7 @@ let repository_option_of_read repository : Pages_ps.repository_option =
 let configuration_of_view view : Pages_ps.configuration =
   {
     Pages_ps.draft = draft_option_of_summary (Read.summary view);
-    repositories =
-      List.map repository_option_of_read (Read.repositories view);
+    repositories = List.map repository_option_of_read (Read.repositories view);
   }
 
 let identity_repository_of_read repository : Pages_ps.identity_repository =
@@ -264,9 +265,8 @@ let identity_configuration_of_view view : Pages_ps.identity_configuration =
    form carries Dream's framework CSRF field. *)
 let render_page request ~state ~feedback =
   Dream.html ~headers:page_headers
-    (Pages_ps.project_setup_page
-       ?user:(session_user request)
-       ~request ~state ~feedback ())
+    (Pages_ps.project_setup_page ?user:(session_user request) ~request ~state
+       ~feedback ())
 
 (* One owner-authorized view, rendered for the requested step. The read model
    is authoritative on every GET: entering the identity step with no
@@ -281,8 +281,7 @@ let render_view request ~details ~feedback view =
       ~feedback
   else if List.exists Read.is_selected (Read.repositories view) then
     render_page request
-      ~state:
-        (Pages_ps.Configure_identity (identity_configuration_of_view view))
+      ~state:(Pages_ps.Configure_identity (identity_configuration_of_view view))
       ~feedback
   else
     render_page request
@@ -328,7 +327,8 @@ let render_from_list request ~user_id ~details ~feedback =
                 ~feedback))
   | Ok options ->
       render_page request
-        ~state:(Pages_ps.Choose_draft (List.map draft_option_of_summary options))
+        ~state:
+          (Pages_ps.Choose_draft (List.map draft_option_of_summary options))
         ~feedback
 
 let make_new_project_handler ~mode request =
@@ -339,10 +339,8 @@ let make_new_project_handler ~mode request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Lwt.return (login_redirect ())
-      | Some user_id ->
-          let is_admin =
-            session_field_opt request "is_admin" = Some "true"
-          in
+      | Some user_id -> (
+          let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             (* Rollout-limited: same clean target as Off, so the redirect
                reveals no feature-flag names or rollout detail. *)
@@ -351,13 +349,12 @@ let make_new_project_handler ~mode request =
             let target = Dream.target request in
             let feedback = feedback_of_target target in
             let details = details_step_of_target target in
-            (match draft_selector_of_target target with
+            match draft_selector_of_target target with
             | Requested_draft draft_id -> (
                 let%lwt loaded = load_available request ~user_id ~draft_id in
                 match loaded with
                 | Error _ -> server_error_page request
-                | Ok (Some view) ->
-                    render_view request ~details ~feedback view
+                | Ok (Some view) -> render_view request ~details ~feedback view
                 | Ok None ->
                     (* Nonexistent, foreign, expired, terminal, and revoked
                        stay indistinguishable; the generic unavailable
@@ -388,7 +385,8 @@ let draft_redirect ~draft_id selection =
     (Uri.to_string
        (Uri.make ~path:"/projects/new"
           ~query:
-            [ ("draft", [ Int64.to_string draft_id ]);
+            [
+              ("draft", [ Int64.to_string draft_id ]);
               ("selection", [ selection ]);
             ]
           ()))
@@ -398,9 +396,7 @@ let details_redirect ~draft_id =
     (Uri.to_string
        (Uri.make ~path:"/projects/new"
           ~query:
-            [ ("draft", [ Int64.to_string draft_id ]);
-              ("step", [ "details" ]);
-            ]
+            [ ("draft", [ Int64.to_string draft_id ]); ("step", [ "details" ]) ]
           ()))
 
 let make_repository_selection_handler ~mode ~load_config request =
@@ -411,19 +407,17 @@ let make_repository_selection_handler ~mode ~load_config request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Lwt.return (login_redirect ())
-      | Some user_id ->
-          let is_admin =
-            session_field_opt request "is_admin" = Some "true"
-          in
+      | Some user_id -> (
+          let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             Lwt.return (bring_redirect ())
-          else (
+          else
             match load_config () with
             | Error _ -> unavailable_page request
-            | Ok config ->
-                if not (Request_origin.same_origin_request config request)
-                then forbidden_page request
-                else (
+            | Ok config -> (
+                if not (Request_origin.same_origin_request config request) then
+                  forbidden_page request
+                else
                   (* Dream's form API enforces the URL-encoded content type
                      and verifies its own CSRF field, which it strips from
                      the returned fields — so the strict parser below sees
@@ -448,7 +442,7 @@ let make_repository_selection_handler ~mode ~load_config request =
                                 Sel.replace db ~user_id ~draft_id
                                   ~selected_snapshot_ids:
                                     (Form.selected_snapshot_ids form)
-                                  (* The primary repository is intentionally
+                                    (* The primary repository is intentionally
                                      not chosen in this step. *)
                                   ~primary_snapshot_id:None)
                           in
@@ -500,8 +494,7 @@ let make_repository_selection_handler ~mode ~load_config request =
                           | Error (Sel.Invalid_user_id | Sel.Invalid_draft_id)
                             ->
                               Lwt.return (feedback_redirect "invalid")
-                          | Error (Sel.Inconsistent_data | Sel.Storage_error)
-                            ->
+                          | Error (Sel.Inconsistent_data | Sel.Storage_error) ->
                               (* A server failure is never disguised as a
                                  user form error. *)
                               server_error_page request)))))

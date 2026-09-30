@@ -18,24 +18,40 @@ let contains haystack needle = Html_assert.contains haystack needle
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
-    ; "DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
-    ; "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE title LIKE 'sec %')"
-    ; "DELETE FROM post_votes WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
-    ; "DELETE FROM comment_votes WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
-    ; "DELETE FROM posts WHERE title LIKE 'sec %'"
-    ; "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
-    ; "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
-    ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
-    ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'sec-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'sec-%'"
-    ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT 'user:' || id::text FROM users WHERE username LIKE 'sec\\_%' OR username LIKE '[deleted\\_%')"
-    ; "DELETE FROM rate_limits WHERE ip_address LIKE 'sec-%'"
-    ; "DELETE FROM dream_session WHERE payload LIKE '%sec\\_%'"
-    ; "DELETE FROM users WHERE username LIKE 'sec\\_%'"
+    [
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'sec\\_%')";
+      "DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'sec\\_%')";
+      "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE title \
+       LIKE 'sec %')";
+      "DELETE FROM post_votes WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'sec\\_%')";
+      "DELETE FROM comment_votes WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'sec\\_%')";
+      "DELETE FROM posts WHERE title LIKE 'sec %'";
+      "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'sec-%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'sec-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'sec-%')";
+      "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'sec-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'sec-%')";
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'sec-%')";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT \
+       'community:' || c.id::text FROM communities c WHERE c.slug LIKE \
+       'sec-%')";
+      "DELETE FROM communities WHERE slug LIKE 'sec-%'";
+      "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT \
+       'user:' || id::text FROM users WHERE username LIKE 'sec\\_%' OR \
+       username LIKE '[deleted\\_%')";
+      "DELETE FROM rate_limits WHERE ip_address LIKE 'sec-%'";
+      "DELETE FROM dream_session WHERE payload LIKE '%sec\\_%'";
+      "DELETE FROM users WHERE username LIKE 'sec\\_%'";
     ]
 
 let or_fail label = function
@@ -67,96 +83,96 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* === fixtures === *)
 
 let q_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@sec.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@sec.invalid', 'x', TRUE) RETURNING id"
 
 let q_community =
   (Caqti_type.(t2 string string) ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name, visibility) VALUES ($1, $1, $2)
-   RETURNING id"
+    "INSERT INTO communities (slug, name, visibility) VALUES ($1, $1, $2)\n\
+    \   RETURNING id"
 
 let q_member =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 let q_moderator =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_moderators (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_moderators (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 let q_post =
   (Caqti_type.(t3 string int int) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id)
-   VALUES ($1, 'sec body', $2, $3) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id)\n\
+    \   VALUES ($1, 'sec body', $2, $3) RETURNING id"
 
 let q_comment =
   (Caqti_type.(t3 string int int) ->! Caqti_type.int)
-  "INSERT INTO comments (content, post_id, user_id) VALUES ($1, $2, $3)
-   RETURNING id"
+    "INSERT INTO comments (content, post_id, user_id) VALUES ($1, $2, $3)\n\
+    \   RETURNING id"
 
 let q_set_avatar =
   (Caqti_type.(t2 (option string) int) ->. Caqti_type.unit)
-  "UPDATE users SET avatar_url = $1 WHERE id = $2"
+    "UPDATE users SET avatar_url = $1 WHERE id = $2"
 
 let q_avatar =
   (Caqti_type.int ->? Caqti_type.(option string))
-  "SELECT avatar_url FROM users WHERE id = $1"
+    "SELECT avatar_url FROM users WHERE id = $1"
 
-let q_username = (Caqti_type.int ->? Caqti_type.string)
-  "SELECT username FROM users WHERE id = $1"
+let q_username =
+  (Caqti_type.int ->? Caqti_type.string)
+    "SELECT username FROM users WHERE id = $1"
 
 let q_count_comments_on_post =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM comments WHERE post_id = $1"
+    "SELECT COUNT(*)::int FROM comments WHERE post_id = $1"
 
 let q_count_notifs =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1"
+    "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1"
 
 let q_count_sessions =
   (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM dream_session
-    WHERE payload::jsonb ->> 'user_id' = $1"
+    "SELECT COUNT(*)::int FROM dream_session\n\
+    \    WHERE payload::jsonb ->> 'user_id' = $1"
 
 let q_local_comment_count =
   (Caqti_type.(t2 int int) ->? Caqti_type.int)
-  "SELECT local_comment_count FROM community_user_stats
-    WHERE user_id = $1 AND community_id = $2"
+    "SELECT local_comment_count FROM community_user_stats\n\
+    \    WHERE user_id = $1 AND community_id = $2"
 
 (* Like q_user but with a REAL argon2 hash — the password-change cases go
    through the production handler, which verifies the old password. *)
 let q_user_hashed =
   (Caqti_type.(t2 string string) ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@sec.invalid', $2, TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@sec.invalid', $2, TRUE) RETURNING id"
 
 let q_channel =
   (Caqti_type.(t2 string int) ->! Caqti_type.int)
-  "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)
-   RETURNING id"
+    "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)\n\
+    \   RETURNING id"
 
 let q_password_hash =
   (Caqti_type.int ->? Caqti_type.string)
-  "SELECT password_hash FROM users WHERE id = $1"
+    "SELECT password_hash FROM users WHERE id = $1"
 
 let q_is_banned =
   (Caqti_type.int ->? Caqti_type.bool)
-  "SELECT is_banned FROM users WHERE id = $1"
+    "SELECT is_banned FROM users WHERE id = $1"
 
 (* === vote ban-enforcement fixtures === *)
 
 let q_community_ban =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 (* Sets the DURABLE global-ban flag without going through
    ban_user_handler. The production handler deliberately revokes every
@@ -167,44 +183,43 @@ let q_community_ban =
    elsewhere, by global_ban_revocation_case. *)
 let q_global_ban =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE users SET is_banned = TRUE WHERE id = $1"
+    "UPDATE users SET is_banned = TRUE WHERE id = $1"
 
 (* Durable global-admin authority for an acting admin in the routed cases:
    the session claim alone no longer grants any of it. *)
 let q_make_admin =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE users SET is_admin = TRUE WHERE id = $1"
+    "UPDATE users SET is_admin = TRUE WHERE id = $1"
 
 let q_post_vote =
   (Caqti_type.(t2 int int) ->? Caqti_type.int)
-  "SELECT direction FROM post_votes WHERE user_id = $1 AND post_id = $2"
+    "SELECT direction FROM post_votes WHERE user_id = $1 AND post_id = $2"
 
 let q_comment_vote =
   (Caqti_type.(t2 int int) ->? Caqti_type.int)
-  "SELECT direction FROM comment_votes WHERE user_id = $1 AND comment_id = $2"
+    "SELECT direction FROM comment_votes WHERE user_id = $1 AND comment_id = $2"
 
 (* Scores are derived, not stored: the same SUM the feed and post pages read. *)
 let q_post_score =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COALESCE(SUM(direction), 0)::int FROM post_votes WHERE post_id = $1"
+    "SELECT COALESCE(SUM(direction), 0)::int FROM post_votes WHERE post_id = $1"
 
 let q_comment_score =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COALESCE(SUM(direction), 0)::int FROM comment_votes
-    WHERE comment_id = $1"
+    "SELECT COALESCE(SUM(direction), 0)::int FROM comment_votes\n\
+    \    WHERE comment_id = $1"
 
 (* local_karma IS stored — the vote SQL denormalizes it onto the AUTHOR's
    community_user_stats row, so a partial mutation would show up here even
    if the vote row itself looked untouched. *)
 let q_local_karma =
   (Caqti_type.(t2 int int) ->? Caqti_type.int)
-  "SELECT local_karma FROM community_user_stats
-    WHERE user_id = $1 AND community_id = $2"
+    "SELECT local_karma FROM community_user_stats\n\
+    \    WHERE user_id = $1 AND community_id = $2"
 
 (* === the pipeline === *)
 
 let sec_secret = "sec-test-secret-value"
-
 let shared_pipeline = ref None
 
 (* Set by the /session route: which identity the NEXT minted session gets —
@@ -218,13 +233,15 @@ let pipeline_for ~url =
   | Some p -> p
   | None ->
       let p =
-        Dream.sql_pool ~size:4 url @@ Dream.set_secret sec_secret
+        Dream.sql_pool ~size:4 url
+        @@ Dream.set_secret sec_secret
         (* Real SQL sessions: the account-deletion case asserts on the
            durable dream_session rows, which memory_sessions does not
            create. *)
         @@ Dream.sql_sessions
         @@ Dream.router
-             [ (* Mints a session for the requested identity and hands back
+             [
+               (* Mints a session for the requested identity and hands back
                   a CSRF token minted inside it. Stands in for POST /login
                   without needing argon2 in the test path; the session it
                   creates is the same durable row a real login creates. *)
@@ -240,8 +257,7 @@ let pipeline_for ~url =
                          let* () =
                            match username with
                            | None -> Lwt.return_unit
-                           | Some u ->
-                               Dream.set_session_field req "username" u
+                           | Some u -> Dream.set_session_field req "username" u
                          in
                          if admin then
                            Dream.set_session_field req "is_admin" "true"
@@ -254,11 +270,14 @@ let pipeline_for ~url =
                    | None -> Dream.respond ~status:`Unauthorized "anon");
                Dream.get "/token" (fun req ->
                    Dream.respond (Dream.csrf_token req));
-               Dream.get "/settings" Earde.Account_handlers.settings_page_handler;
-               Dream.post "/settings" Earde.Account_handlers.update_profile_handler;
+               Dream.get "/settings"
+                 Earde.Account_handlers.settings_page_handler;
+               Dream.post "/settings"
+                 Earde.Account_handlers.update_profile_handler;
                Dream.post "/delete-account"
                  Earde.Account_handlers.delete_account_handler;
-               Dream.post "/comments" Earde.Comment_handlers.create_comment_handler;
+               Dream.post "/comments"
+                 Earde.Comment_handlers.create_comment_handler;
                Dream.post "/posts" Earde.Post_handlers.create_post_handler;
                Dream.post "/update-community"
                  Earde.Community_settings_handlers.update_community_handler;
@@ -279,7 +298,7 @@ let pipeline_for ~url =
                  Earde.Vote_handlers.vote_comment_handler
                (* No /add-mod and no /remove-mod: their absence from this
                   router mirrors bin/main.ml, and the legacy-route case
-                  asserts the real app answers 404 for them. *)
+                  asserts the real app answers 404 for them. *);
              ]
       in
       shared_pipeline := Some p;
@@ -293,9 +312,7 @@ let session_cookie label response =
   with
   | None -> Alcotest.fail (label ^ ": no session cookie")
   | Some v -> (
-      match String.index_opt v ';' with
-      | Some i -> String.sub v 0 i
-      | None -> v)
+      match String.index_opt v ';' with Some i -> String.sub v 0 i | None -> v)
 
 (* One live session for [uid], plus a CSRF token minted inside it. *)
 let login ~url ?username ?(admin = false) uid =
@@ -313,7 +330,8 @@ let token_in ~url ~cookie =
   let* response =
     p
       (Dream.request ~method_:`GET ~target:"/token"
-         ~headers:[ ("Cookie", cookie) ] "")
+         ~headers:[ ("Cookie", cookie) ]
+         "")
   in
   Dream.body response
 
@@ -346,18 +364,18 @@ let multipart_body_with_file ~file_field ~filename ~bytes fields =
            boundary k v)
        fields)
   ^ Printf.sprintf
-      "--%s\r\nContent-Disposition: form-data; name=\"%s\"; \
-       filename=\"%s\"\r\nContent-Type: image/png\r\n\r\n%s\r\n"
+      "--%s\r\n\
+       Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n\
+       Content-Type: image/png\r\n\
+       \r\n\
+       %s\r\n"
       boundary file_field filename bytes
   ^ Printf.sprintf "--%s--\r\n" boundary
 
 let do_get ~url ~cookie ~target =
   let p = pipeline_for ~url in
   let* response =
-    p
-      (Dream.request ~method_:`GET ~target
-         ~headers:[ ("Cookie", cookie) ]
-         "")
+    p (Dream.request ~method_:`GET ~target ~headers:[ ("Cookie", cookie) ] "")
   in
   let* body = Dream.body response in
   Lwt.return (Dream.status_to_int (Dream.status response), response, body)
@@ -372,11 +390,12 @@ let do_post ~url ~cookie ~target ~token ?(multipart = false) ?file fields =
     | None -> if multipart then multipart_body all else form_body all
   in
   let headers =
-    [ ( "Content-Type",
+    [
+      ( "Content-Type",
         if multipart || file <> None then
           "multipart/form-data; boundary=" ^ boundary
         else "application/x-www-form-urlencoded" );
-      ("Cookie", cookie)
+      ("Cookie", cookie);
     ]
   in
   let request = Dream.request ~method_:`POST ~target ~headers "" in
@@ -406,7 +425,8 @@ let avatar_theft_case =
       let victim_file = "earde_1753000000123_004217.webp" in
       let victim_path = Security_fixture.make_upload_file victim_file in
       let* r =
-        C.exec q_set_avatar (Some (Security_fixture.avatar_url_of victim_file), victim)
+        C.exec q_set_avatar
+          (Some (Security_fixture.avatar_url_of victim_file), victim)
       in
       let* () = or_fail "set victim avatar" r in
       (* The attacker starts with an avatar of their own, so the assertion
@@ -414,10 +434,12 @@ let avatar_theft_case =
       let attacker_file = "earde_1753000000999_000001.webp" in
       let attacker_path = Security_fixture.make_upload_file attacker_file in
       let* r =
-        C.exec q_set_avatar (Some (Security_fixture.avatar_url_of attacker_file), attacker)
+        C.exec q_set_avatar
+          (Some (Security_fixture.avatar_url_of attacker_file), attacker)
       in
       let* () = or_fail "set attacker avatar" r in
-      Alcotest.(check bool) "victim file exists before" true
+      Alcotest.(check bool)
+        "victim file exists before" true
         (Sys.file_exists victim_path);
 
       let* cookie, token = login ~url attacker in
@@ -425,9 +447,10 @@ let avatar_theft_case =
          the field the form used to round-trip. *)
       let* status, _, _ =
         do_post ~url ~cookie ~target:"/settings" ~token ~multipart:true
-          [ ("bio", "sec bio");
+          [
+            ("bio", "sec bio");
             ("existing_avatar_url", Security_fixture.avatar_url_of victim_file);
-            ("avatar_url", "")
+            ("avatar_url", "");
           ]
       in
       Alcotest.(check int) "profile update accepted" 303 status;
@@ -446,9 +469,11 @@ let avatar_theft_case =
         do_post ~url ~cookie ~target:"/delete-account" ~token []
       in
       Alcotest.(check int) "account deleted" 303 status;
-      Alcotest.(check bool) "VICTIM FILE SURVIVES" true
+      Alcotest.(check bool)
+        "VICTIM FILE SURVIVES" true
         (Sys.file_exists victim_path);
-      Alcotest.(check bool) "attacker's own file is cleaned up" false
+      Alcotest.(check bool)
+        "attacker's own file is cleaned up" false
         (Sys.file_exists attacker_path);
       (* The victim's row is untouched. *)
       let* still = C.find_opt q_avatar victim in
@@ -464,14 +489,15 @@ let avatar_theft_case =
 let avatar_preserved_case =
   db_case
     "profile update with no new upload preserves the caller's real current \
-     avatar"
-    (fun ~url _conn c ->
+     avatar" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* uid = C.find q_user "sec_keeper" in
       let* uid = or_fail "user" uid in
       let mine = "earde_1753000111222_000042.webp" in
       let _ = Security_fixture.make_upload_file mine in
-      let* r = C.exec q_set_avatar (Some (Security_fixture.avatar_url_of mine), uid) in
+      let* r =
+        C.exec q_set_avatar (Some (Security_fixture.avatar_url_of mine), uid)
+      in
       let* () = or_fail "set avatar" r in
       let* cookie, token = login ~url uid in
       (* No file part and no existing_avatar_url at all — the browser now
@@ -495,9 +521,8 @@ let avatar_preserved_case =
 
 let session_revocation_case =
   db_case
-    "account deletion: a second live session stops authenticating and \
-     writes nothing"
-    (fun ~url _conn c ->
+    "account deletion: a second live session stops authenticating and writes \
+     nothing" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* uid = C.find q_user "sec_twosession" in
       let* uid = or_fail "user" uid in
@@ -525,7 +550,8 @@ let session_revocation_case =
       Alcotest.(check int) "session B authenticates before deletion" 200 status;
 
       let* status, _, _ =
-        do_post ~url ~cookie:cookie_a ~target:"/delete-account" ~token:token_a []
+        do_post ~url ~cookie:cookie_a ~target:"/delete-account" ~token:token_a
+          []
       in
       Alcotest.(check int) "deleted through session A" 303 status;
 
@@ -537,7 +563,8 @@ let session_revocation_case =
       let* status, _, _ = do_get ~url ~cookie:cookie_b ~target:"/whoami" in
       Alcotest.(check int) "session B is logged out" 401 status;
       let* status, _, body = do_get ~url ~cookie:cookie_b ~target:"/settings" in
-      Alcotest.(check bool) "settings sends B to login" true
+      Alcotest.(check bool)
+        "settings sends B to login" true
         (status = 302 || status = 303 || contains body "login");
 
       (* ...and writes nothing. The token must be minted inside B, which
@@ -549,8 +576,9 @@ let session_revocation_case =
       let* token_b = token_in ~url ~cookie:cookie_b in
       let* _ =
         do_post ~url ~cookie:cookie_b ~target:"/comments" ~token:token_b
-          [ ("content", "sec after-delete comment");
-            ("post_id", string_of_int post)
+          [
+            ("content", "sec after-delete comment");
+            ("post_id", string_of_int post);
           ]
       in
       let* after = C.find q_count_comments_on_post post in
@@ -567,12 +595,14 @@ let session_revocation_case =
       (* The account really was deleted, not merely logged out. *)
       let* name = C.find_opt q_username uid in
       let* name = or_fail "username" name in
-      Alcotest.(check bool) "account anonymized" true
+      Alcotest.(check bool)
+        "account anonymized" true
         (match name with Some n -> contains n "[deleted_" | None -> false);
       Lwt.return_unit)
 
 let password_reset_revocation_case =
-  db_case "password reset revokes the user's other sessions" (fun ~url _conn c ->
+  db_case "password reset revokes the user's other sessions"
+    (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* uid = C.find q_user "sec_resetter" in
       let* uid = or_fail "user" uid in
@@ -587,12 +617,13 @@ let password_reset_revocation_case =
 
       let token = "sec-reset-token-value" in
       let* created =
-        Earde.Credential_store.create_token c
-          ("sec_resetter@sec.invalid") token
+        Earde.Credential_store.create_token c "sec_resetter@sec.invalid" token
       in
       let* created = or_fail_s "create token" created in
       Alcotest.(check bool) "token created" true created;
-      let* ok = Earde.Credential_store.reset_password_atomically c token "sec-new-hash" in
+      let* ok =
+        Earde.Credential_store.reset_password_atomically c token "sec-new-hash"
+      in
       let* ok = or_fail_s "reset" ok in
       Alcotest.(check bool) "reset applied" true ok;
 
@@ -605,7 +636,7 @@ let password_reset_revocation_case =
 
 let q_count_reset_tokens =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM password_resets WHERE user_id = $1"
+    "SELECT COUNT(*)::int FROM password_resets WHERE user_id = $1"
 
 (* Two links issued for one account: using either must kill the other, or
    an older link (one an attacker read from the mailbox, say) could set a
@@ -635,18 +666,26 @@ let password_reset_kills_other_links_case =
       let* n = C.find q_count_reset_tokens uid in
       let* n = or_fail "tokens before" n in
       Alcotest.(check int) "two links outstanding" 2 n;
-      let* ok = Earde.Credential_store.reset_password_atomically c "sec-newer-link" "sec-owner-hash" in
+      let* ok =
+        Earde.Credential_store.reset_password_atomically c "sec-newer-link"
+          "sec-owner-hash"
+      in
       let* ok = or_fail_s "owner reset" ok in
       Alcotest.(check bool) "owner's reset applied" true ok;
       let* valid = Earde.Credential_store.validate_token c "sec-older-link" in
       let* valid = or_fail_s "validate older" valid in
-      Alcotest.(check (option int)) "the older link no longer validates" None valid;
-      let* again = Earde.Credential_store.reset_password_atomically c "sec-older-link" "sec-attacker-hash" in
+      Alcotest.(check (option int))
+        "the older link no longer validates" None valid;
+      let* again =
+        Earde.Credential_store.reset_password_atomically c "sec-older-link"
+          "sec-attacker-hash"
+      in
       let* again = or_fail_s "older reset" again in
       Alcotest.(check bool) "the older link cannot reset again" false again;
       let* stored = C.find_opt q_password_hash uid in
       let* stored = or_fail "stored hash" stored in
-      Alcotest.(check (option string)) "the owner's password stands" (Some "sec-owner-hash") stored;
+      Alcotest.(check (option string))
+        "the owner's password stands" (Some "sec-owner-hash") stored;
       let* n = C.find q_count_reset_tokens uid in
       let* n = or_fail "tokens after" n in
       Alcotest.(check int) "no link survives for the account" 0 n;
@@ -660,7 +699,6 @@ let password_reset_kills_other_links_case =
 (* ------------------------------------------------------------------ *)
 
 let pw_old = "sec-old-password-1"
-
 let pw_new = "sec-new-password-9"
 
 (* Auth.hash_password pads the encoded hash to encoded_len with trailing
@@ -675,9 +713,8 @@ let strip_nuls s =
 
 let password_change_revocation_case =
   db_case
-    "password change: every session is revoked, the changing browser is \
-     logged out, and the hash really rotates"
-    (fun ~url _conn c ->
+    "password change: every session is revoked, the changing browser is logged \
+     out, and the hash really rotates" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* hash = Earde.Auth.hash_password pw_old in
       let* hash = or_fail_s "hash fixture" hash in
@@ -699,13 +736,15 @@ let password_change_revocation_case =
       let* status, _, body =
         do_post ~url ~cookie:cookie_a ~target:"/settings/password"
           ~token:token_a
-          [ ("old_password", pw_old);
+          [
+            ("old_password", pw_old);
             ("new_password", pw_new);
-            ("confirm_password", pw_new)
+            ("confirm_password", pw_new);
           ]
       in
       Alcotest.(check int) "change accepted" 200 status;
-      Alcotest.(check bool) "re-auth copy, not an error page" true
+      Alcotest.(check bool)
+        "re-auth copy, not an error page" true
         (contains body "Password Changed");
 
       (* The hash really rotated: old no longer verifies, new does. *)
@@ -713,16 +752,11 @@ let password_change_revocation_case =
       let* stored = or_fail "stored hash" stored in
       let stored = Option.get stored in
       Alcotest.(check bool) "hash rotated" true (stored <> hash);
-      let* old_ok =
-        Earde.Auth.verify_password ~password:pw_old ~hash:stored
-      in
-      Alcotest.(check bool) "old password no longer authenticates" false
-        (old_ok = Ok true);
-      let* new_ok =
-        Earde.Auth.verify_password ~password:pw_new ~hash:stored
-      in
-      Alcotest.(check bool) "new password authenticates" true
-        (new_ok = Ok true);
+      let* old_ok = Earde.Auth.verify_password ~password:pw_old ~hash:stored in
+      Alcotest.(check bool)
+        "old password no longer authenticates" false (old_ok = Ok true);
+      let* new_ok = Earde.Auth.verify_password ~password:pw_new ~hash:stored in
+      Alcotest.(check bool) "new password authenticates" true (new_ok = Ok true);
 
       (* BOTH previously issued sessions are dead — as durable rows and
          over HTTP, including the very browser that made the change. *)
@@ -732,8 +766,7 @@ let password_change_revocation_case =
       let* status, _, _ = do_get ~url ~cookie:cookie_a ~target:"/whoami" in
       Alcotest.(check int) "the changing browser is logged out" 401 status;
       let* status, _, _ = do_get ~url ~cookie:cookie_b ~target:"/whoami" in
-      Alcotest.(check int) "the other (stolen) session is logged out" 401
-        status;
+      Alcotest.(check int) "the other (stolen) session is logged out" 401 status;
 
       let* status, _, _ = do_get ~url ~cookie:cookie_c ~target:"/whoami" in
       Alcotest.(check int) "another user's session is unaffected" 200 status;
@@ -745,8 +778,7 @@ let password_change_revocation_case =
 let password_change_wrong_old_case =
   db_case
     "password change with the wrong current password revokes nothing and \
-     leaves the hash untouched"
-    (fun ~url _conn c ->
+     leaves the hash untouched" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* hash = Earde.Auth.hash_password pw_old in
       let* hash = or_fail_s "hash fixture" hash in
@@ -759,13 +791,15 @@ let password_change_wrong_old_case =
       let* status, _, body =
         do_post ~url ~cookie:cookie_a ~target:"/settings/password"
           ~token:token_a
-          [ ("old_password", "sec-not-the-password");
+          [
+            ("old_password", "sec-not-the-password");
             ("new_password", pw_new);
-            ("confirm_password", pw_new)
+            ("confirm_password", pw_new);
           ]
       in
       Alcotest.(check int) "refused" 200 status;
-      Alcotest.(check bool) "wrong-password copy" true
+      Alcotest.(check bool)
+        "wrong-password copy" true
         (contains body "Wrong Password");
 
       let* n = C.find q_count_sessions (string_of_int uid) in
@@ -786,9 +820,8 @@ let password_change_wrong_old_case =
 
 let global_ban_revocation_case =
   db_case
-    "global ban: the target's sessions are revoked and the stale session \
-     can no longer mint a realtime token"
-    (fun ~url _conn c ->
+    "global ban: the target's sessions are revoked and the stale session can \
+     no longer mint a realtime token" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* admin = C.find q_user "sec_banadmin" in
       let* admin = or_fail "admin" admin in
@@ -816,11 +849,9 @@ let global_ban_revocation_case =
          but 401 proves it authenticated (200 with a configured signing
          secret, 503 without one). *)
       let token_target = "/c/sec-banchat/ch/sec-banchan/realtime-token" in
-      let* status, _, _ =
-        do_get ~url ~cookie:cookie_t ~target:token_target
-      in
-      Alcotest.(check bool) "token endpoint authenticates before the ban"
-        true (status <> 401);
+      let* status, _, _ = do_get ~url ~cookie:cookie_t ~target:token_target in
+      Alcotest.(check bool)
+        "token endpoint authenticates before the ban" true (status <> 401);
 
       (* The ban goes through the real routed admin handler. *)
       let* cookie_ad, token_ad = login ~url ~admin:true admin in
@@ -843,9 +874,7 @@ let global_ban_revocation_case =
       let* status, _, _ = do_get ~url ~cookie:cookie_t2 ~target:"/whoami" in
       Alcotest.(check int) "session two is logged out" 401 status;
       (* ...so the stale cookie can no longer mint a fresh realtime token. *)
-      let* status, _, _ =
-        do_get ~url ~cookie:cookie_t ~target:token_target
-      in
+      let* status, _, _ = do_get ~url ~cookie:cookie_t ~target:token_target in
       Alcotest.(check int) "realtime token refresh refused" 401 status;
 
       (* Admin and bystander sessions survive. *)
@@ -871,7 +900,8 @@ let ban_requires_admin_case =
           ~target:("/admin/ban/user/" ^ string_of_int target)
           ~token:token_a []
       in
-      Alcotest.(check bool) "refused as non-admin" true
+      Alcotest.(check bool)
+        "refused as non-admin" true
         (contains body "not an Admin");
       let* banned = C.find_opt q_is_banned target in
       let* banned = or_fail "banned flag" banned in
@@ -889,9 +919,8 @@ let ban_requires_admin_case =
 
 let parent_binding_case =
   db_case
-    "comment parent binding: same-post accepted; cross-post, \
-     cross-community, private and nonexistent parents refused"
-    (fun ~url:_ _conn c ->
+    "comment parent binding: same-post accepted; cross-post, cross-community, \
+     private and nonexistent parents refused" (fun ~url:_ _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_pauthor" in
       let* author = or_fail "author" author in
@@ -922,8 +951,8 @@ let parent_binding_case =
 
       let create ?parent label =
         let* r =
-          Earde.Comment_store.create_comment c ("sec reply " ^ label) post_a author
-            parent
+          Earde.Comment_store.create_comment c ("sec reply " ^ label) post_a
+            author parent
         in
         or_fail_s ("create " ^ label) r
       in
@@ -957,9 +986,8 @@ let parent_binding_case =
    rejected reply leaves no comment, no notification, and no counter. *)
 let parent_binding_no_side_effects_case =
   db_case
-    "a refused cross-community reply writes no comment, no notification \
-     and no counter"
-    (fun ~url _conn c ->
+    "a refused cross-community reply writes no comment, no notification and no \
+     counter" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* mallory = C.find q_user "sec_mallory" in
       let* mallory = or_fail "mallory" mallory in
@@ -991,9 +1019,10 @@ let parent_binding_no_side_effects_case =
       let* cookie, token = login ~url mallory in
       let* status, _, body =
         do_post ~url ~cookie ~target:"/comments" ~token
-          [ ("content", "sec h injected reply");
+          [
+            ("content", "sec h injected reply");
             ("post_id", string_of_int post_a);
-            ("parent_id", string_of_int carol_comment)
+            ("parent_id", string_of_int carol_comment);
           ]
       in
       Alcotest.(check int) "refused as a client error" 400 status;
@@ -1005,20 +1034,30 @@ let parent_binding_no_side_effects_case =
           Alcotest.(check bool)
             ("response does not leak " ^ needle)
             false (contains body needle))
-        [ "sec-h-secret"; "sec h secret post"; "sec h carol secret";
-          "comments_parent_id_fkey"; "constraint"; "Database error";
-          "INSERT"; "Caqti"; string_of_int carol_comment ];
+        [
+          "sec-h-secret";
+          "sec h secret post";
+          "sec h carol secret";
+          "comments_parent_id_fkey";
+          "constraint";
+          "Database error";
+          "INSERT";
+          "Caqti";
+          string_of_int carol_comment;
+        ];
 
       let* comments_after = C.find q_count_comments_on_post post_a in
       let* comments_after = or_fail "after" comments_after in
       Alcotest.(check int) "no comment row" comments_before comments_after;
       let* notifs_after = C.find q_count_notifs carol in
       let* notifs_after = or_fail "notifs after" notifs_after in
-      Alcotest.(check int) "no notification for the foreign parent's owner"
-        notifs_before notifs_after;
+      Alcotest.(check int)
+        "no notification for the foreign parent's owner" notifs_before
+        notifs_after;
       let* stats = C.find_opt q_local_comment_count (mallory, alpha) in
       let* stats = or_fail "stats" stats in
-      Alcotest.(check bool) "no local comment counter" true
+      Alcotest.(check bool)
+        "no local comment counter" true
         (match stats with None -> true | Some n -> n = 0);
 
       (* The same request WITHOUT the forged parent still works, so the
@@ -1026,15 +1065,16 @@ let parent_binding_no_side_effects_case =
       let* token = token_in ~url ~cookie in
       let* status, _, _ =
         do_post ~url ~cookie ~target:"/comments" ~token
-          [ ("content", "sec h ordinary reply");
-            ("post_id", string_of_int post_a)
+          [
+            ("content", "sec h ordinary reply");
+            ("post_id", string_of_int post_a);
           ]
       in
       Alcotest.(check int) "an ordinary comment still succeeds" 303 status;
       let* final = C.find q_count_comments_on_post post_a in
       let* final = or_fail "final" final in
-      Alcotest.(check int) "exactly one comment was written"
-        (comments_before + 1) final;
+      Alcotest.(check int)
+        "exactly one comment was written" (comments_before + 1) final;
       Lwt.return_unit)
 
 (* ------------------------------------------------------------------ *)
@@ -1043,9 +1083,8 @@ let parent_binding_no_side_effects_case =
 
 let upload_authorization_ordering_case =
   db_case
-    "unauthorized upload: a non-member's post attempt runs no conversion \
-     and stores no file"
-    (fun ~url _conn c ->
+    "unauthorized upload: a non-member's post attempt runs no conversion and \
+     stores no file" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* outsider = C.find q_user "sec_outsider" in
       let* outsider = or_fail "outsider" outsider in
@@ -1061,10 +1100,11 @@ let upload_authorization_ordering_case =
       let* status, _, _ =
         do_post ~url ~cookie ~target:"/posts" ~token
           ~file:("image_url", "x.png", Security_fixture.real_png)
-          [ ("title", "sec outsider post");
+          [
+            ("title", "sec outsider post");
             ("content", "sec body");
             ("community_id", string_of_int community);
-            ("url", "")
+            ("url", "");
           ]
       in
       Alcotest.(check bool) "refused" true (status <> 303);
@@ -1075,9 +1115,8 @@ let upload_authorization_ordering_case =
 
 let upload_format_gate_case =
   db_case
-    "upload: a valid PNG becomes a stored WebP; a non-image is refused \
-     before any file is created"
-    (fun ~url _conn c ->
+    "upload: a valid PNG becomes a stored WebP; a non-image is refused before \
+     any file is created" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* uid = C.find q_user "sec_uploader" in
       let* uid = or_fail "user" uid in
@@ -1092,21 +1131,22 @@ let upload_format_gate_case =
             ~file:("avatar_url", "payload.png", bytes)
             [ ("bio", "sec bio") ]
         in
-        Alcotest.(check bool)
-          (label ^ ": not accepted")
-          true (status <> 303);
+        Alcotest.(check bool) (label ^ ": not accepted") true (status <> 303);
         Alcotest.(check bool)
           (label ^ ": expected refusal message")
           true (contains body message);
         Alcotest.(check (list string))
-          (label ^ ": no file created") before (Security_fixture.uploads_listing ());
+          (label ^ ": no file created")
+          before
+          (Security_fixture.uploads_listing ());
         Lwt.return_unit
       in
       let* () = refuse "plain text" "hello, not an image" in
       let* () = refuse "svg" "<svg xmlns='http://www.w3.org/2000/svg'/>" in
       let* () =
         refuse "imagemagick MSL"
-          "<?xml version=\"1.0\"?><image><read filename=\"/etc/passwd\"/></image>"
+          "<?xml version=\"1.0\"?><image><read \
+           filename=\"/etc/passwd\"/></image>"
       in
       let* () = refuse "postscript" "%!PS-Adobe-3.0\nshowpage\n" in
       let* () = refuse "truncated png" "\x89PN" in
@@ -1131,31 +1171,34 @@ let upload_format_gate_case =
       let* stored = or_fail "avatar" stored in
       (match stored with
       | Some (Some u) ->
-          Alcotest.(check bool) "stored under the uploads prefix" true
+          Alcotest.(check bool)
+            "stored under the uploads prefix" true
             (contains u "/static/uploads/earde_");
-          Alcotest.(check bool) "output is WebP, not the submitted format"
-            true
+          Alcotest.(check bool)
+            "output is WebP, not the submitted format" true
             (Filename.check_suffix u ".webp");
           let path =
             Filename.concat Security_fixture.uploads_dir (Filename.basename u)
           in
-          Alcotest.(check bool) "the file really exists" true
-            (Sys.file_exists path);
+          Alcotest.(check bool)
+            "the file really exists" true (Sys.file_exists path);
           (* Transcoded, not stored verbatim. *)
           let ic = open_in_bin path in
           let len = min 12 (in_channel_length ic) in
           let head = really_input_string ic len in
           close_in ic;
-          Alcotest.(check bool) "content is a WebP container" true
-            (contains head "WEBP");
-          Alcotest.(check bool) "the PNG signature is gone" false
-            (contains head "PNG")
+          Alcotest.(check bool)
+            "content is a WebP container" true (contains head "WEBP");
+          Alcotest.(check bool)
+            "the PNG signature is gone" false (contains head "PNG")
       | _ -> Alcotest.fail "no avatar stored after a valid upload");
 
       (* No stray temporaries: exactly one new file. *)
       let after = Security_fixture.uploads_listing () in
-      Alcotest.(check int) "exactly one new stored file"
-        (List.length before + 1) (List.length after);
+      Alcotest.(check int)
+        "exactly one new stored file"
+        (List.length before + 1)
+        (List.length after);
       ignore token;
       Lwt.return_unit)
 
@@ -1173,21 +1216,21 @@ let upload_rate_limit_case =
           hit (n - 1) (r :: acc)
       in
       let* results = hit (Earde.Rate_limit_store.upload_max_attempts + 2) [] in
-      let allowed =
-        List.length (List.filter (fun r -> r = `Allowed) results)
-      in
-      Alcotest.(check int) "allowance is spent, then blocked"
+      let allowed = List.length (List.filter (fun r -> r = `Allowed) results) in
+      Alcotest.(check int)
+        "allowance is spent, then blocked"
         Earde.Rate_limit_store.upload_max_attempts allowed;
-      Alcotest.(check bool) "the tail is blocked" true
+      Alcotest.(check bool)
+        "the tail is blocked" true
         (List.exists (fun r -> r = `Blocked) results);
       (* Distinct from the authentication bucket: spending the upload
          allowance must not lock the user out of logging in. *)
       let* login_check = Earde.Rate_limit_store.check c ip "/login" in
       let* login_check = or_fail_s "login bucket" login_check in
-      Alcotest.(check bool) "the /login bucket is untouched" true
-        (login_check = `Allowed);
-      Alcotest.(check bool) "upload allowance differs from auth allowance"
-        true
+      Alcotest.(check bool)
+        "the /login bucket is untouched" true (login_check = `Allowed);
+      Alcotest.(check bool)
+        "upload allowance differs from auth allowance" true
         (Earde.Rate_limit_store.upload_max_attempts <> 5
         || Earde.Rate_limit_store.upload_endpoint <> "/login");
       Lwt.return_unit)
@@ -1201,8 +1244,7 @@ let upload_rate_limit_case =
    live session and a valid CSRF token must find nothing there. *)
 let legacy_mod_routes_case =
   db_case
-    "legacy /add-mod and /remove-mod are unroutable for an ordinary \
-     moderator"
+    "legacy /add-mod and /remove-mod are unroutable for an ordinary moderator"
     (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* top = C.find q_user "sec_topmod" in
@@ -1220,23 +1262,24 @@ let legacy_mod_routes_case =
 
       (* The real route table, exactly as bin/main.ml builds it. *)
       let app =
-        Dream.sql_pool ~size:1 url @@ Dream.set_secret sec_secret
+        Dream.sql_pool ~size:1 url
+        @@ Dream.set_secret sec_secret
         @@ Dream.memory_sessions
         @@ (fun handler request ->
-             let* () =
-               Dream.set_session_field request "user_id"
-                 (string_of_int ordinary)
-             in
-             handler request)
+          let* () =
+            Dream.set_session_field request "user_id" (string_of_int ordinary)
+          in
+          handler request)
         @@ Dream.router
-             [ Dream.get "/mint" (fun req ->
+             [
+               Dream.get "/mint" (fun req ->
                    Dream.respond (Dream.csrf_token req));
                Dream.post "/update-community"
                  Earde.Community_settings_handlers.update_community_handler;
                Dream.post "/c/:slug/manage-mods/add"
                  Earde.Moderation_handlers.manage_mods_add_handler;
                Dream.post "/c/:slug/manage-mods/remove"
-                 Earde.Moderation_handlers.manage_mods_remove_handler
+                 Earde.Moderation_handlers.manage_mods_remove_handler;
              ]
       in
       let* mint = app (Dream.request ~method_:`GET ~target:"/mint" "") in
@@ -1246,8 +1289,9 @@ let legacy_mod_routes_case =
         let request =
           Dream.request ~method_:`POST ~target
             ~headers:
-              [ ("Content-Type", "application/x-www-form-urlencoded");
-                ("Cookie", cookie)
+              [
+                ("Content-Type", "application/x-www-form-urlencoded");
+                ("Cookie", cookie);
               ]
             ""
         in
@@ -1257,17 +1301,19 @@ let legacy_mod_routes_case =
       in
       let* status =
         post "/add-mod"
-          [ ("community_id", string_of_int community);
+          [
+            ("community_id", string_of_int community);
             ("community_slug", "sec-mods");
-            ("username", "sec_modtarget")
+            ("username", "sec_modtarget");
           ]
       in
       Alcotest.(check int) "POST /add-mod is not routed" 404 status;
       let* status =
         post "/remove-mod"
-          [ ("community_id", string_of_int community);
+          [
+            ("community_id", string_of_int community);
             ("community_slug", "sec-mods");
-            ("target_user_id", string_of_int top)
+            ("target_user_id", string_of_int top);
           ]
       in
       Alcotest.(check int) "POST /remove-mod is not routed" 404 status;
@@ -1276,9 +1322,11 @@ let legacy_mod_routes_case =
          moderator on its own terms rather than by being absent. *)
       let* mods = Earde.Moderator_store.get_community_moderators c community in
       let* mods = or_fail_s "mods" mods in
-      Alcotest.(check bool) "the Top Mod is still a moderator" true
+      Alcotest.(check bool)
+        "the Top Mod is still a moderator" true
         (List.exists (fun (u : Earde.User_store.user) -> u.id = top) mods);
-      Alcotest.(check bool) "no new moderator was appointed" false
+      Alcotest.(check bool)
+        "no new moderator was appointed" false
         (List.exists (fun (u : Earde.User_store.user) -> u.id = target) mods);
       let* status =
         post "/c/sec-mods/manage-mods/add" [ ("username", "sec_modtarget") ]
@@ -1288,7 +1336,8 @@ let legacy_mod_routes_case =
         (status <> 303);
       let* mods = Earde.Moderator_store.get_community_moderators c community in
       let* mods = or_fail_s "mods again" mods in
-      Alcotest.(check bool) "still no new moderator" false
+      Alcotest.(check bool)
+        "still no new moderator" false
         (List.exists (fun (u : Earde.User_store.user) -> u.id = target) mods);
       Lwt.return_unit)
 
@@ -1300,8 +1349,8 @@ let legacy_mod_routes_case =
    score, the AUTHOR's stored local_karma and their derived global karma.
    A refused vote must move none of them — asserting all four is what makes
    a partial mutation visible rather than merely a missing vote row. *)
-let check_post_vote_state label c ~voter ~post ~author ~community ~vote
-    ~score ~local ~karma =
+let check_post_vote_state label c ~voter ~post ~author ~community ~vote ~score
+    ~local ~karma =
   let (module C : Caqti_lwt.CONNECTION) = c in
   let* actual_vote = C.find_opt q_post_vote (voter, post) in
   let* actual_vote = or_fail "post vote row" actual_vote in
@@ -1312,7 +1361,8 @@ let check_post_vote_state label c ~voter ~post ~author ~community ~vote
   let* actual_local = C.find_opt q_local_karma (author, community) in
   let* actual_local = or_fail "local karma" actual_local in
   Alcotest.(check (option int))
-    (label ^ ": author local karma") local actual_local;
+    (label ^ ": author local karma")
+    local actual_local;
   let* actual_karma = Earde.User_store.get_user_karma c author in
   let* actual_karma = or_fail_s "karma" actual_karma in
   Alcotest.(check int) (label ^ ": author karma") karma actual_karma;
@@ -1330,7 +1380,8 @@ let check_comment_vote_state label c ~voter ~comment ~author ~community ~vote
   let* actual_local = C.find_opt q_local_karma (author, community) in
   let* actual_local = or_fail "local karma" actual_local in
   Alcotest.(check (option int))
-    (label ^ ": author local karma") local actual_local;
+    (label ^ ": author local karma")
+    local actual_local;
   let* actual_karma = Earde.User_store.get_user_karma c author in
   let* actual_karma = or_fail_s "karma" actual_karma in
   Alcotest.(check int) (label ^ ": author karma") karma actual_karma;
@@ -1339,23 +1390,21 @@ let check_comment_vote_state label c ~voter ~comment ~author ~community ~vote
 let vote ~url ~cookie ~post ~direction =
   let* token = token_in ~url ~cookie in
   do_post ~url ~cookie ~target:"/vote" ~token
-    [ ("post_id", string_of_int post);
-      ("direction", string_of_int direction)
-    ]
+    [ ("post_id", string_of_int post); ("direction", string_of_int direction) ]
 
 let vote_comment ~url ~cookie ~comment ~direction =
   let* token = token_in ~url ~cookie in
   do_post ~url ~cookie ~target:"/vote-comment" ~token
-    [ ("comment_id", string_of_int comment);
-      ("direction", string_of_int direction)
+    [
+      ("comment_id", string_of_int comment);
+      ("direction", string_of_int direction);
     ]
 
 (* A — a community-banned user cannot create or change a post vote. *)
 let post_vote_community_ban_case =
   db_case
     "post vote: a community ban stops the vote, the score and the author's \
-     karma from moving"
-    (fun ~url _conn c ->
+     karma from moving" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_vauthor" in
       let* author = or_fail "author" author in
@@ -1387,7 +1436,8 @@ let post_vote_community_ban_case =
       (* Flipping to a downvote is refused... *)
       let* status, _, body = vote ~url ~cookie ~post ~direction:(-1) in
       Alcotest.(check int) "downvote refused" 403 status;
-      Alcotest.(check bool) "refused on the community ban, by name" true
+      Alcotest.(check bool)
+        "refused on the community ban, by name" true
         (contains body "banned from this community");
       let* () =
         check_post_vote_state "after refused downvote" c ~voter ~post ~author
@@ -1422,8 +1472,7 @@ let post_vote_community_ban_case =
 let post_vote_removal_community_ban_case =
   db_case
     "post vote removal: a community-banned user cannot withdraw a vote cast \
-     before the ban"
-    (fun ~url _conn c ->
+     before the ban" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_vrauthor" in
       let* author = or_fail "author" author in
@@ -1447,12 +1496,12 @@ let post_vote_removal_community_ban_case =
 
       let* status, _, body = vote ~url ~cookie ~post ~direction:0 in
       Alcotest.(check int) "removal refused" 403 status;
-      Alcotest.(check bool) "refused on the community ban" true
+      Alcotest.(check bool)
+        "refused on the community ban" true
         (contains body "banned from this community");
       let* () =
-        check_post_vote_state "vote survives the refused removal" c ~voter
-          ~post ~author ~community ~vote:(Some 1) ~score:1 ~local:(Some 1)
-          ~karma:1
+        check_post_vote_state "vote survives the refused removal" c ~voter ~post
+          ~author ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
       in
       Lwt.return_unit)
 
@@ -1460,9 +1509,8 @@ let post_vote_removal_community_ban_case =
    resolved through the comment's canonical parent post. *)
 let comment_vote_community_ban_case =
   db_case
-    "comment vote: a community ban stops the vote, the score and the \
-     author's karma from moving"
-    (fun ~url _conn c ->
+    "comment vote: a community ban stops the vote, the score and the author's \
+     karma from moving" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_cvauthor" in
       let* author = or_fail "author" author in
@@ -1479,8 +1527,8 @@ let comment_vote_community_ban_case =
       let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:1 in
       Alcotest.(check int) "upvote accepted before the ban" 303 status;
       let* () =
-        check_comment_vote_state "baseline" c ~voter ~comment ~author
-          ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        check_comment_vote_state "baseline" c ~voter ~comment ~author ~community
+          ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
       in
 
       let* r = C.exec q_community_ban (voter, community) in
@@ -1490,7 +1538,8 @@ let comment_vote_community_ban_case =
         vote_comment ~url ~cookie ~comment ~direction:(-1)
       in
       Alcotest.(check int) "downvote refused" 403 status;
-      Alcotest.(check bool) "refused on the community ban" true
+      Alcotest.(check bool)
+        "refused on the community ban" true
         (contains body "banned from this community");
       let* () =
         check_comment_vote_state "after refused downvote" c ~voter ~comment
@@ -1502,8 +1551,7 @@ let comment_vote_community_ban_case =
 let comment_vote_removal_community_ban_case =
   db_case
     "comment vote removal: a community-banned user cannot withdraw a comment \
-     vote cast before the ban"
-    (fun ~url _conn c ->
+     vote cast before the ban" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_cvrauthor" in
       let* author = or_fail "author" author in
@@ -1520,8 +1568,8 @@ let comment_vote_removal_community_ban_case =
       let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:1 in
       Alcotest.(check int) "vote cast before the ban" 303 status;
       let* () =
-        check_comment_vote_state "baseline" c ~voter ~comment ~author
-          ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        check_comment_vote_state "baseline" c ~voter ~comment ~author ~community
+          ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
       in
 
       let* r = C.exec q_community_ban (voter, community) in
@@ -1547,9 +1595,8 @@ let comment_vote_removal_community_ban_case =
    inheriting its safety from the session layer. *)
 let vote_global_ban_defense_in_depth_case =
   db_case
-    "global ban: an authenticated session that survived the ban still \
-     cannot vote on a post or a comment"
-    (fun ~url _conn c ->
+    "global ban: an authenticated session that survived the ban still cannot \
+     vote on a post or a comment" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_gvauthor" in
       let* author = or_fail "author" author in
@@ -1577,7 +1624,8 @@ let vote_global_ban_defense_in_depth_case =
 
       let* status, _, body = vote ~url ~cookie ~post ~direction:1 in
       Alcotest.(check int) "post vote refused" 403 status;
-      Alcotest.(check bool) "refused on the global ban, by name" true
+      Alcotest.(check bool)
+        "refused on the global ban, by name" true
         (contains body "permanently banned");
       let* () =
         check_post_vote_state "no post vote written" c ~voter ~post ~author
@@ -1586,7 +1634,8 @@ let vote_global_ban_defense_in_depth_case =
 
       let* status, _, body = vote_comment ~url ~cookie ~comment ~direction:1 in
       Alcotest.(check int) "comment vote refused" 403 status;
-      Alcotest.(check bool) "refused on the global ban" true
+      Alcotest.(check bool)
+        "refused on the global ban" true
         (contains body "permanently banned");
       let* () =
         check_comment_vote_state "no comment vote written" c ~voter ~comment
@@ -1605,8 +1654,7 @@ let vote_global_ban_defense_in_depth_case =
 let vote_unbanned_control_case =
   db_case
     "unbanned control: add, change and remove still work on both post and \
-     comment votes"
-    (fun ~url _conn c ->
+     comment votes" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_okauthor" in
       let* author = or_fail "author" author in
@@ -1631,9 +1679,8 @@ let vote_unbanned_control_case =
       let* status, _, _ = vote ~url ~cookie ~post ~direction:(-1) in
       Alcotest.(check int) "post vote changed to a downvote" 303 status;
       let* () =
-        check_post_vote_state "post downvote" c ~voter ~post ~author
-          ~community ~vote:(Some (-1)) ~score:(-1) ~local:(Some (-1))
-          ~karma:(-1)
+        check_post_vote_state "post downvote" c ~voter ~post ~author ~community
+          ~vote:(Some (-1)) ~score:(-1) ~local:(Some (-1)) ~karma:(-1)
       in
       let* status, _, _ = vote ~url ~cookie ~post ~direction:0 in
       Alcotest.(check int) "post vote removed" 303 status;
@@ -1661,9 +1708,8 @@ let vote_unbanned_control_case =
    community_id field pointing the other way changes nothing either way. *)
 let vote_target_community_binding_case =
   db_case
-    "vote target ownership: the ban decision follows the post's own \
-     community, not a submitted community_id"
-    (fun ~url _conn c ->
+    "vote target ownership: the ban decision follows the post's own community, \
+     not a submitted community_id" (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* author = C.find q_user "sec_tbauthor" in
       let* author = or_fail "author" author in
@@ -1685,19 +1731,20 @@ let vote_target_community_binding_case =
       let forged_vote ~post ~claimed =
         let* token = token_in ~url ~cookie in
         do_post ~url ~cookie ~target:"/vote" ~token
-          [ ("post_id", string_of_int post);
+          [
+            ("post_id", string_of_int post);
             ("direction", "1");
             (* Not a field the handler reads — the point is that adding it
                cannot move the decision. *)
-            ("community_id", string_of_int claimed)
+            ("community_id", string_of_int claimed);
           ]
       in
 
       (* Voting in alpha, while claiming to be in beta (where they ARE
          banned): allowed, because the post lives in alpha. *)
       let* status, _, _ = forged_vote ~post:post_alpha ~claimed:beta in
-      Alcotest.(check int) "alpha vote accepted despite the beta claim" 303
-        status;
+      Alcotest.(check int)
+        "alpha vote accepted despite the beta claim" 303 status;
       let* () =
         check_post_vote_state "alpha vote landed" c ~voter ~post:post_alpha
           ~author ~community:alpha ~vote:(Some 1) ~score:1 ~local:(Some 1)
@@ -1707,14 +1754,14 @@ let vote_target_community_binding_case =
       (* Voting in beta, while claiming to be in alpha (where they are NOT
          banned): refused, because the post lives in beta. *)
       let* status, _, body = forged_vote ~post:post_beta ~claimed:alpha in
-      Alcotest.(check int) "beta vote refused despite the alpha claim" 403
-        status;
-      Alcotest.(check bool) "refused on the community ban" true
+      Alcotest.(check int)
+        "beta vote refused despite the alpha claim" 403 status;
+      Alcotest.(check bool)
+        "refused on the community ban" true
         (contains body "banned from this community");
       let* () =
-        check_post_vote_state "nothing written in beta" c ~voter
-          ~post:post_beta ~author ~community:beta ~vote:None ~score:0
-          ~local:None ~karma:1
+        check_post_vote_state "nothing written in beta" c ~voter ~post:post_beta
+          ~author ~community:beta ~vote:None ~score:0 ~local:None ~karma:1
       in
       Lwt.return_unit)
 
@@ -1729,55 +1776,79 @@ let password_change_kills_reset_links_case =
       let* uid = C.find q_user_hashed ("sec_pwlinks", strip_nuls hash) in
       let* uid = or_fail "user" uid in
       let* created =
-        Earde.Credential_store.create_token c "sec_pwlinks@sec.invalid" "sec-pre-change-link"
+        Earde.Credential_store.create_token c "sec_pwlinks@sec.invalid"
+          "sec-pre-change-link"
       in
       let* _ = or_fail_s "create" created in
       let* cookie, token = login ~url ~username:"sec_pwlinks" uid in
       let* status, _, body =
         do_post ~url ~cookie ~target:"/settings/password" ~token
-          [ ("old_password", pw_old); ("new_password", pw_new); ("confirm_password", pw_new) ]
+          [
+            ("old_password", pw_old);
+            ("new_password", pw_new);
+            ("confirm_password", pw_new);
+          ]
       in
       Alcotest.(check int) "change accepted" 200 status;
-      Alcotest.(check bool) "change applied" true (contains body "Password Changed");
-      let* again = Earde.Credential_store.reset_password_atomically c "sec-pre-change-link" "sec-attacker-hash" in
+      Alcotest.(check bool)
+        "change applied" true
+        (contains body "Password Changed");
+      let* again =
+        Earde.Credential_store.reset_password_atomically c "sec-pre-change-link"
+          "sec-attacker-hash"
+      in
       let* again = or_fail_s "old link reset" again in
-      Alcotest.(check bool) "a link issued before the change cannot reset" false again;
+      Alcotest.(check bool)
+        "a link issued before the change cannot reset" false again;
       let* n = C.find q_count_reset_tokens uid in
       let* n = or_fail "tokens after" n in
       Alcotest.(check int) "no link survives the change" 0 n;
       Lwt.return_unit)
 
 let session_suite =
-  [ session_revocation_case; password_reset_revocation_case;
+  [
+    session_revocation_case;
+    password_reset_revocation_case;
     password_reset_kills_other_links_case;
-    password_change_revocation_case; password_change_wrong_old_case;
+    password_change_revocation_case;
+    password_change_wrong_old_case;
     password_change_kills_reset_links_case;
-    global_ban_revocation_case; ban_requires_admin_case ]
+    global_ban_revocation_case;
+    ban_requires_admin_case;
+  ]
 
 let comment_parent_suite =
   [ parent_binding_case; parent_binding_no_side_effects_case ]
 
 let upload_suite =
-  [ upload_authorization_ordering_case; upload_format_gate_case;
-    upload_rate_limit_case ]
+  [
+    upload_authorization_ordering_case;
+    upload_format_gate_case;
+    upload_rate_limit_case;
+  ]
 
 let legacy_route_suite = [ legacy_mod_routes_case ]
 
 let vote_ban_suite =
-  [ post_vote_community_ban_case; post_vote_removal_community_ban_case;
+  [
+    post_vote_community_ban_case;
+    post_vote_removal_community_ban_case;
     comment_vote_community_ban_case;
     comment_vote_removal_community_ban_case;
-    vote_global_ban_defense_in_depth_case; vote_unbanned_control_case;
-    vote_target_community_binding_case ]
+    vote_global_ban_defense_in_depth_case;
+    vote_unbanned_control_case;
+    vote_target_community_binding_case;
+  ]
 
 let suites =
-    (* The gated halves: each reproduces the original attack against the
+  (* The gated halves: each reproduces the original attack against the
        real handlers over the real routed pipeline, on durable SQL
        sessions. *)
-  [ ("security_avatar_ownership", avatar_suite)
-  ; ("security_session_revocation", session_suite)
-  ; ("security_comment_parent_binding", comment_parent_suite)
-  ; ("security_upload_hardening", upload_suite)
-  ; ("security_legacy_mod_routes", legacy_route_suite)
-  ; ("security_vote_ban_enforcement", vote_ban_suite)
+  [
+    ("security_avatar_ownership", avatar_suite);
+    ("security_session_revocation", session_suite);
+    ("security_comment_parent_binding", comment_parent_suite);
+    ("security_upload_hardening", upload_suite);
+    ("security_legacy_mod_routes", legacy_route_suite);
+    ("security_vote_ban_enforcement", vote_ban_suite);
   ]

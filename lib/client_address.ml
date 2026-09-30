@@ -2,9 +2,7 @@
    normalization that makes a per-IP bucket actually per-IP. *)
 
 let fallback_key = "unknown"
-
 let default_trusted_proxies = [ "127.0.0.1"; "::1" ]
-
 let trusted_proxies_env = "EARDE_TRUSTED_PROXIES"
 
 (* Round-tripping through the system parser is what canonicalizes: two
@@ -54,12 +52,12 @@ let last_forwarded value =
 let client_ip ~trusted_proxies ~peer ~forwarded_for =
   match peer_ip peer with
   | None -> fallback_key
-  | Some peer_ip ->
+  | Some peer_ip -> (
       if not (List.mem peer_ip trusted_proxies) then
         (* Direct connection: forwarded headers are pure client input here
            and are ignored outright. *)
         peer_ip
-      else (
+      else
         match forwarded_for with
         | None -> peer_ip
         | Some value -> (
