@@ -336,7 +336,7 @@ let create_post_case =
         let attempt label ~url =
           run_post ~url ~session:(session uid) ~target:"/create-post"
             ~file:("image", "banfc.png", Security_fixture.real_png)
-            ~form Earde.Handlers.create_post_handler
+            ~form Earde.Post_handlers.create_post_handler
           |> Lwt.map (fun (response, body) -> (label, response, body))
         in
 
@@ -408,7 +408,7 @@ let create_comment_case =
         run_post ~url ~session:(session uid) ~target:"/create-comment"
           ~form:
             [ ("content", "banfc comment"); ("post_id", string_of_int pid) ]
-          Earde.Handlers.create_comment_handler
+          Earde.Comment_handlers.create_comment_handler
         |> Lwt.map (fun (response, body) -> (label, response, body))
       in
 
@@ -456,7 +456,7 @@ let send_message_case =
             [ ("community_slug", "banfc-chat");
               ("channel_slug", "banfc-general");
               ("content", "banfc hello") ]
-          Earde.Handlers.send_message_handler
+          Earde.Chat_handlers.send_message_handler
       in
       let no_message label =
         let* n = count "messages" (module C) q_count_messages chid in
@@ -505,8 +505,8 @@ let send_message_case =
 
 let report_router =
   Dream.router
-    [ Dream.get "/c/:slug/report" Earde.Handlers.report_form_handler;
-      Dream.post "/c/:slug/reports" Earde.Handlers.create_report_handler ]
+    [ Dream.get "/c/:slug/report" Earde.Moderation_handlers.report_form_handler;
+      Dream.post "/c/:slug/reports" Earde.Moderation_handlers.create_report_handler ]
 
 let report_case =
   db_case
@@ -566,9 +566,9 @@ let report_case =
 let start_thread_router =
   Dream.router
     [ Dream.get "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
-        Earde.Handlers.start_thread_form_handler;
+        Earde.Start_thread_handlers.start_thread_form_handler;
       Dream.post "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
-        Earde.Handlers.start_thread_create_handler ]
+        Earde.Start_thread_handlers.start_thread_create_handler ]
 
 let start_thread_case =
   db_case
@@ -637,21 +637,21 @@ let real_bans_case =
           ~form:
             [ ("title", "banfc banned post"); ("content", "banfc body");
               ("community_id", string_of_int cid); ("url", "") ]
-          Earde.Handlers.create_post_handler
+          Earde.Post_handlers.create_post_handler
       in
       let comment_attempt () =
         run_post ~url ~session:(session uid) ~target:"/create-comment"
           ~form:
             [ ("content", "banfc banned comment");
               ("post_id", string_of_int pid) ]
-          Earde.Handlers.create_comment_handler
+          Earde.Comment_handlers.create_comment_handler
       in
       let chat_attempt () =
         run_post ~url ~session:(session uid) ~target:"/send-message"
           ~form:
             [ ("community_slug", "banfc-bans");
               ("channel_slug", "banfc-bans-ch"); ("content", "banfc chat") ]
-          Earde.Handlers.send_message_handler
+          Earde.Chat_handlers.send_message_handler
       in
       let refused label (response, body) needle =
         Alcotest.(check int)

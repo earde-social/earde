@@ -174,29 +174,29 @@ let app_pipeline ?session_user_id ?session_username ?(session_admin = false)
             legacy post redirect, the community/section feeds (boundary),
             the settings index (navigation), and the notification
             center. *)
-         Dream.get "/c/:slug/t/:thread" Earde.Handlers.view_thread_handler;
-         Dream.get "/p/:id" Earde.Handlers.view_post_handler;
-         Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+         Dream.get "/c/:slug/t/:thread" Earde.Post_handlers.view_thread_handler;
+         Dream.get "/p/:id" Earde.Post_handlers.view_post_handler;
+         Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
          Dream.get "/c/:slug/s/:section_slug"
-           Earde.Handlers.community_section_handler;
+           Earde.Community_handlers.community_section_handler;
          Dream.get "/c/:slug/settings"
-           Earde.Handlers.community_settings_handler;
-         Dream.get "/notifications" Earde.Handlers.notifications_handler;
+           Earde.Community_settings_handlers.community_settings_handler;
+         Dream.get "/notifications" Earde.Account_handlers.notifications_handler;
          (* Slice 3 read-side surfaces: the comment write path, the
             origin-scoped moderation mutations the destination context
             must NOT unlock, and the deferred discovery surfaces the
             slice must leave untouched. *)
-         Dream.post "/comments" Earde.Handlers.create_comment_handler;
+         Dream.post "/comments" Earde.Comment_handlers.create_comment_handler;
          Dream.post "/c/:slug/posts/:id/mod_delete"
-           Earde.Handlers.mod_delete_post_handler;
+           Earde.Post_handlers.mod_delete_post_handler;
          Dream.post "/c/:slug/comments/:id/mod_delete"
-           Earde.Handlers.mod_delete_comment_handler;
-         Dream.get "/feed" Earde.Handlers.feed_handler;
-         Dream.get "/search" Earde.Handlers.search_handler;
-         Dream.get "/u/:username" Earde.Handlers.view_profile_handler;
+           Earde.Comment_handlers.mod_delete_comment_handler;
+         Dream.get "/feed" Earde.Public_handlers.feed_handler;
+         Dream.get "/search" Earde.Public_handlers.search_handler;
+         Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler;
          (* Slice 4: the real durable-thread composer pair. *)
-         Dream.get "/new-post" Earde.Handlers.new_post_page;
-         Dream.post "/posts" Earde.Handlers.create_post_handler;
+         Dream.get "/new-post" Earde.Post_handlers.new_post_page;
+         Dream.post "/posts" Earde.Post_handlers.create_post_handler;
        ]
 
 let mint label pipeline =

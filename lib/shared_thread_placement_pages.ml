@@ -569,7 +569,7 @@ let document ?user ?request ?shell ?(in_settings_shell = false) ~title ~body ()
   in
   match shell with
   | None ->
-      Components.launch_message_page ?request ~noindex:true ~title
+      Page_shell.launch_message_page ?request ~noindex:true ~title
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
         ()
   | Some ((community_record : Community_types.community), rail_communities, sidebar) ->
@@ -592,7 +592,7 @@ let document ?user ?request ?shell ?(in_settings_shell = false) ~title ~body ()
           in
           context ^ Printf.sprintf "<div class='create-shell'>%s</div>" wrapped
       in
-      Components.launch_community_page ?user ?request ~noindex:true
+      Community_shell.launch_community_page ?user ?request ~noindex:true
         ~rail_communities ~community:community_record ~sidebar
         ~page_class:"launch-community-connections" ~title ~content ()
 

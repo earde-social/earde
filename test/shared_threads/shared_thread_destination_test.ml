@@ -59,7 +59,7 @@ let feed_lifecycle_case =
       in
       let* () = Shared_thread_http_fixture.withdraw_seed conn ~actor:author ~placement:plw ~origin:o in
       let dest_href =
-        Earde.Components.canonical_thread_path "sth-df-d" post
+        Earde.Post_cards.canonical_thread_path "sth-df-d" post
           "Sth df thread"
       in
       let anon = Shared_thread_http_fixture.app_pipeline ~url () in
@@ -223,7 +223,7 @@ let section_stats_case =
       Alcotest.(check int) "section feed 200" 200 (status_of response);
       Shared_thread_http_fixture.count "once in the chosen section" body "Sth ds sectioned" 1;
       must body
-        (Earde.Components.canonical_thread_path "sth-ds-d" post2
+        (Earde.Post_cards.canonical_thread_path "sth-ds-d" post2
            "Sth ds sectioned");
       must body "Shared from";
       (* Not in a sibling section. *)
@@ -312,7 +312,7 @@ let recent_knowledge_case =
          compact provenance; the local row keeps its byte-identical
          legacy link. *)
       must body
-        (Earde.Components.canonical_thread_path "sth-dr-d" post
+        (Earde.Post_cards.canonical_thread_path "sth-dr-d" post
            "Sth dr thread");
       must body "Shared from";
       must body "sth-dr-sec";
@@ -363,10 +363,10 @@ let context_url_case =
           ~destination:d ()
       in
       let canonical =
-        Earde.Components.canonical_thread_path "sth-dc-o" post "Sth dc thread"
+        Earde.Post_cards.canonical_thread_path "sth-dc-o" post "Sth dc thread"
       in
       let dest_path =
-        Earde.Components.canonical_thread_path "sth-dc-d" post "Sth dc thread"
+        Earde.Post_cards.canonical_thread_path "sth-dc-d" post "Sth dc thread"
       in
       let anon = Shared_thread_http_fixture.app_pipeline ~url () in
       (* The origin page behaves exactly as before. *)
@@ -430,12 +430,12 @@ let context_url_case =
         let* response, _ =
           Shared_thread_http_fixture.get
             ~target:
-              (Earde.Components.canonical_thread_path "sth-dc-d" p
+              (Earde.Post_cards.canonical_thread_path "sth-dc-d" p
                  ("Sth dc " ^ label))
             anon
         in
         Shared_thread_http_fixture.check_301 (label ^ " context")
-          (Earde.Components.canonical_thread_path "sth-dc-o" p
+          (Earde.Post_cards.canonical_thread_path "sth-dc-o" p
              ("Sth dc " ^ label))
           response;
         Lwt.return_unit
@@ -490,7 +490,7 @@ let context_url_case =
       let* response, body =
         Shared_thread_http_fixture.get
           ~target:
-            (Earde.Components.canonical_thread_path "sth-dc-d" p_long
+            (Earde.Post_cards.canonical_thread_path "sth-dc-d" p_long
                long_title)
           anon
       in
@@ -575,7 +575,7 @@ let comment_participation_case =
       let* () = exec conn "restore content" Shared_thread_http_fixture.q_restore_content post in
       (* The POST enforces the same rule and preserves context. *)
       let dest_path =
-        Earde.Components.canonical_thread_path "sth-dp-d" post "Sth dp thread"
+        Earde.Post_cards.canonical_thread_path "sth-dp-d" post "Sth dp thread"
       in
       let post_comment label uid ~content ~context =
         let* pipeline, cookie, token, _ = Shared_thread_http_fixture.acting label ~url ~uid () in
@@ -599,7 +599,7 @@ let comment_participation_case =
       let* _, body =
         Shared_thread_http_fixture.get
           ~target:
-            (Earde.Components.canonical_thread_path "sth-dp-o" post
+            (Earde.Post_cards.canonical_thread_path "sth-dp-o" post
                "Sth dp thread")
           anon
       in
@@ -637,7 +637,7 @@ let comment_participation_case =
           ~context:(Some "sth-dp-d3")
       in
       Shared_thread_http_fixture.check_location "authorized private context preserved"
-        (Earde.Components.canonical_thread_path "sth-dp-d3" post
+        (Earde.Post_cards.canonical_thread_path "sth-dp-d3" post
            "Sth dp thread")
         response;
       let* response, _ =
@@ -676,10 +676,10 @@ let moderation_boundary_case =
       let* pl = Shared_thread_http_fixture.seed_request conn ~actor:author ~post ~destination:d () in
       let* () = Shared_thread_http_fixture.seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
       let dest_path =
-        Earde.Components.canonical_thread_path "sth-dm-d" post "Sth dm thread"
+        Earde.Post_cards.canonical_thread_path "sth-dm-d" post "Sth dm thread"
       in
       let canonical =
-        Earde.Components.canonical_thread_path "sth-dm-o" post "Sth dm thread"
+        Earde.Post_cards.canonical_thread_path "sth-dm-o" post "Sth dm thread"
       in
       (* The destination top mod sees a plain reader's page: no post or
          comment removal, no bans, no management links — and the report
@@ -768,7 +768,7 @@ let boundary_case =
       in
       let* () = Shared_thread_http_fixture.seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
       let canonical =
-        Earde.Components.canonical_thread_path "sth-dx-o" post "Sth dx thread"
+        Earde.Post_cards.canonical_thread_path "sth-dx-o" post "Sth dx thread"
       in
       let anon = Shared_thread_http_fixture.app_pipeline ~url () in
       (* Global feed: the canonical row once, no provenance grammar, no
@@ -808,7 +808,7 @@ let boundary_case =
       let* _, body =
         Shared_thread_http_fixture.get
           ~target:
-            (Earde.Components.canonical_thread_path "sth-dx-d" post
+            (Earde.Post_cards.canonical_thread_path "sth-dx-d" post
                "Sth dx thread")
           anon
       in

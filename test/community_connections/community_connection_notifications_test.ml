@@ -792,7 +792,7 @@ let notifications_page_for ~url ~label user_id =
     let* () =
       Dream.set_session_field req "user_id" (string_of_int user_id)
     in
-    Earde.Handlers.notifications_handler req
+    Earde.Account_handlers.notifications_handler req
   in
   let* response =
     pipeline (Dream.request ~method_:`GET ~target:"/notifications" "")

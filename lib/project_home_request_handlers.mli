@@ -1,6 +1,5 @@
 (** HTTP layer for the existing-community home request of one verified
-    permanent project (GET and POST /projects/:slug/request-home), kept out
-    of the legacy [Handlers] macro-module. Both handlers derive access only
+    permanent project (GET and POST /projects/:slug/request-home). Both handlers derive access only
     from the injected closed mode and the Dream session (a [user_id] counts
     only when it parses as a positive integer; [is_admin = "true"] matters
     only alongside a valid user), through the existing

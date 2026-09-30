@@ -280,7 +280,7 @@ let thread_entry_case =
       let* member = insert_user conn "sth_te_member" in
       let* () = Shared_thread_http_fixture.add_member conn ~user:member ~community:o in
       let thread_target =
-        Earde.Components.canonical_thread_path "sth-te-o" post
+        Earde.Post_cards.canonical_thread_path "sth-te-o" post
           "Sth te thread"
       in
       let marker = "Share with a community" in
@@ -342,7 +342,7 @@ let post_share_flow_case =
       let* _ = Shared_thread_fixture.connect conn ~actor:otop o d3 in
       let target = Shared_thread_http_fixture.share_path ~slug:"sth-pf-o" ~post in
       let expected_redirect =
-        Earde.Components.canonical_thread_path "sth-pf-o" post
+        Earde.Post_cards.canonical_thread_path "sth-pf-o" post
           "Sth pf thread"
         ^ "/share?done=requested"
       in
@@ -1414,7 +1414,7 @@ let notif_render_case =
     (fun ~url conn ->
       let* author, otop, dtop, o, d, post, _ = Shared_thread_http_fixture.fixture conn "nr" in
       let share_link =
-        Earde.Components.canonical_thread_path "sth-nr-o" post
+        Earde.Post_cards.canonical_thread_path "sth-nr-o" post
           "Sth nr thread"
         ^ "/share"
       in
@@ -1574,7 +1574,7 @@ let capability_share_case =
     (fun ~url conn ->
       let* author, _otop, dtop, o, d, post, _ = Shared_thread_http_fixture.fixture conn "cs" in
       let thread_link =
-        Earde.Components.canonical_thread_path "sth-cs-o" post
+        Earde.Post_cards.canonical_thread_path "sth-cs-o" post
           "Sth cs thread"
       in
       let share_href = Printf.sprintf "href='%s/share'" thread_link in
@@ -1658,7 +1658,7 @@ let capability_share_case =
         | Error e -> Alcotest.failf "reject: %s" (Shared_thread_fixture.error_str e)
       in
       let thread2 =
-        Earde.Components.canonical_thread_path "sth-cs-o" post2 "Sth cs two"
+        Earde.Post_cards.canonical_thread_path "sth-cs-o" post2 "Sth cs two"
       in
       let* body = mailbox author in
       must body "Sth cs Dest declined &#8220;Sth cs two&#8221;";
@@ -1678,7 +1678,7 @@ let capability_requester_role_case =
         Shared_thread_http_fixture.seed_accept conn ~reviewer:dtop ~placement:p ~destination:d ()
       in
       let thread_link =
-        Earde.Components.canonical_thread_path "sth-cq-o" post
+        Earde.Post_cards.canonical_thread_path "sth-cq-o" post
           "Sth cq thread"
       in
       let share_href = Printf.sprintf "href='%s/share'" thread_link in

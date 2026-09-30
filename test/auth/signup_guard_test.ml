@@ -4,7 +4,7 @@ let check_parse name expected body =
 
 let check_random name expected username =
   Alcotest.test_case name `Quick (fun () ->
-      Alcotest.(check bool) name expected (Earde.Pages.looks_random_username username))
+      Alcotest.(check bool) name expected (Earde.Admin_pages.looks_random_username username))
 
 let suites =
     (* Turnstile siteverify response parsing. Pure, no network — fail closed on

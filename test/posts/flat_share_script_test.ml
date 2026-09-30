@@ -101,10 +101,10 @@ let make_fixtures (module C : Caqti_lwt.CONNECTION) =
    request-independent and must appear verbatim in the page document. *)
 let router =
   Dream.router
-    [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler
-    ; Dream.get "/feed" Earde.Handlers.feed_handler
-    ; Dream.get "/search" Earde.Handlers.search_handler
-    ; Dream.get "/u/:username" Earde.Handlers.view_profile_handler
+    [ Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
+    ; Dream.get "/feed" Earde.Public_handlers.feed_handler
+    ; Dream.get "/search" Earde.Public_handlers.search_handler
+    ; Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler
     ; Dream.get "/probe/rows/:slug" (fun req ->
           Dream.sql req (fun db ->
               let slug = Dream.param req "slug" in
@@ -124,7 +124,7 @@ let router =
                          (String.concat "\n"
                             (List.map
                                (fun (item : Earde.Post_types.feed_item) ->
-                                 Earde.Components.render_post req []
+                                 Earde.Post_cards.render_post req []
                                    item.Earde.Post_types.fi_post)
                                posts))
                    | Error _ -> Dream.respond ~status:`Internal_Server_Error "")

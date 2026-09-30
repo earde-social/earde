@@ -180,18 +180,18 @@ let build_pipeline ~url pending_form =
   in
   Dream.sql_pool ~size:4 url @@ Dream.set_secret secret @@ Dream.sql_sessions
   @@ Dream.router
-       [ Dream.post "/login" (with_form Earde.Handlers.login_handler)
-       ; Dream.get "/admin" Earde.Handlers.admin_dashboard_handler
+       [ Dream.post "/login" (with_form Earde.Auth_handlers.login_handler)
+       ; Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler
        ; Dream.post "/admin/ban/user/:id"
-           (with_form Earde.Handlers.ban_user_handler)
-       ; Dream.get "/debug-state" Earde.Handlers.debug_state_handler
-       ; Dream.post "/delete-post" (with_form Earde.Handlers.delete_post_handler)
-       ; Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+           (with_form Earde.Admin_handlers.ban_user_handler)
+       ; Dream.get "/debug-state" Earde.Admin_handlers.debug_state_handler
+       ; Dream.post "/delete-post" (with_form Earde.Post_handlers.delete_post_handler)
+       ; Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
        ; Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
-           Earde.Handlers.realtime_token_handler
-       ; Dream.get "/c/:slug/settings" Earde.Handlers.community_settings_handler
+           Earde.Chat_handlers.realtime_token_handler
+       ; Dream.get "/c/:slug/settings" Earde.Community_settings_handlers.community_settings_handler
        ; Dream.post "/c/:slug/manage-mods/add"
-           (with_form Earde.Handlers.manage_mods_add_handler)
+           (with_form Earde.Moderation_handlers.manage_mods_add_handler)
        ; Dream.get "/probe" (fun req ->
              match Dream.session_field req "user_id" with
              | Some uid ->

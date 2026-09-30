@@ -175,8 +175,8 @@ let form_body fields =
 
 let router =
   Dream.router
-    [ Dream.get "/c/:slug/report" Earde.Handlers.report_form_handler
-    ; Dream.post "/c/:slug/reports" Earde.Handlers.create_report_handler
+    [ Dream.get "/c/:slug/report" Earde.Moderation_handlers.report_form_handler
+    ; Dream.post "/c/:slug/reports" Earde.Moderation_handlers.create_report_handler
     ]
 
 (* One request against the real pipeline. A [form] makes it a POST and

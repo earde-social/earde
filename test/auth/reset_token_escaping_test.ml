@@ -1,6 +1,6 @@
 (* === Reset-token attribute escaping (pass 16B security fix) ===
 
-   Pages.reset_password_page re-emits the attacker-controlled reset token in a
+   Auth_pages.reset_password_page re-emits the attacker-controlled reset token in a
    single-quoted hidden attribute: [<input type='hidden' name='token'
    value='...'>]. Before the fix the raw token was interpolated verbatim, so a
    token containing a quote escaped the attribute on the POST handler's
@@ -23,7 +23,7 @@ let render_reset ?error token =
     Lwt_main.run
       (Dream.memory_sessions
          (fun req ->
-           rendered := Earde.Pages.reset_password_page ~token ?error req;
+           rendered := Earde.Auth_pages.reset_password_page ~token ?error req;
            Dream.html "")
          (Dream.request ~method_:`GET ~target:"/reset-password" ""))
   in
@@ -36,7 +36,7 @@ let form_body fields =
          Dream.to_percent_encoded k ^ "=" ^ Dream.to_percent_encoded v)
        fields)
 
-(* Drives the REAL Handlers.reset_password_handler: a valid same-session
+(* Drives the REAL Auth_handlers.reset_password_handler: a valid same-session
    dream.csrf is minted inside the pipeline and injected into the urlencoded
    body, exactly like the analytics POST runner. The mismatch and too-short
    arms re-render before any Dream.sql call, so no pool is mounted — if a
@@ -52,7 +52,7 @@ let run_reset_post ~token ~password ~confirm =
              (form_body
                 [ ("dream.csrf", csrf); ("token", token);
                   ("password", password); ("confirm_password", confirm) ]);
-           Earde.Handlers.reset_password_handler req)
+           Earde.Auth_handlers.reset_password_handler req)
      in
      let request =
        Dream.request ~method_:`POST ~target:"/reset-password"
@@ -277,7 +277,7 @@ let render_login () =
     Lwt_main.run
       (Dream.memory_sessions
          (fun req ->
-           rendered := Earde.Pages.login_form req;
+           rendered := Earde.Auth_pages.login_form req;
            Dream.html "")
          (Dream.request ~method_:`GET ~target:"/login" ""))
   in
@@ -289,7 +289,7 @@ let render_signup () =
     Lwt_main.run
       (Dream.memory_sessions
          (fun req ->
-           rendered := Earde.Pages.signup_form req;
+           rendered := Earde.Auth_pages.signup_form req;
            Dream.html "")
          (Dream.request ~method_:`GET ~target:"/signup" ""))
   in

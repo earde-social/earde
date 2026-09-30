@@ -1,6 +1,6 @@
 (** HTTP layer for permanent project creation over verified GitHub drafts
     (POST /projects and the permanent GET /projects/:slug/setup
-    destination), kept out of the legacy [Handlers] macro-module. Both
+    destination). Both
     handlers derive access only from the injected closed mode and the Dream
     session (a [user_id] counts only when it parses as a positive integer;
     [is_admin = "true"] matters only alongside a valid user), through the

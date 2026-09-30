@@ -238,11 +238,11 @@ let build_pipeline ~url pending_form =
   in
   Dream.sql_pool ~size:4 url @@ Dream.set_secret secret @@ Dream.sql_sessions
   @@ Dream.router
-       [ Dream.post "/login" (with_form Earde.Handlers.login_handler)
+       [ Dream.post "/login" (with_form Earde.Auth_handlers.login_handler)
        ; Dream.post "/ban-community-user"
-           (with_form Earde.Handlers.ban_community_user_handler)
+           (with_form Earde.Moderation_handlers.ban_community_user_handler)
        ; Dream.post "/delete-post"
-           (with_form Earde.Handlers.delete_post_handler)
+           (with_form Earde.Post_handlers.delete_post_handler)
        ; Dream.get "/probe" (fun req ->
              match Dream.session_field req "user_id" with
              | Some uid ->

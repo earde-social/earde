@@ -104,11 +104,11 @@ let build_pipeline ~url =
           else Http_fixture.encoded_form_body fields);
        handler request)
   @@ Dream.router
-       [ Dream.post "/update-community" Earde.Handlers.update_community_handler;
+       [ Dream.post "/update-community" Earde.Community_settings_handlers.update_community_handler;
          Dream.post "/c/:slug/settings/visibility"
-           Earde.Handlers.update_community_visibility_handler;
+           Earde.Community_settings_handlers.update_community_visibility_handler;
          Dream.post "/c/:slug/settings/indexability"
-           Earde.Handlers.update_community_indexability_handler
+           Earde.Community_settings_handlers.update_community_indexability_handler
        ]
 
 let pipeline_for ~url =

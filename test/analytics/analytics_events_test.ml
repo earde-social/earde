@@ -163,7 +163,7 @@ let signup_case =
       let* () = or_fail "pending" r in
       let* status, payloads =
         run_get_handler ~url ~target:"/confirm?token=step6_tok_1"
-          Earde.Handlers.confirm_email_handler
+          Earde.Auth_handlers.confirm_email_handler
       in
       Alcotest.(check int) "confirm status" 200 status;
       (match payloads with
@@ -191,7 +191,7 @@ let signup_case =
       (* Replay: token consumed -> `Invalid -> no event. *)
       let* status, payloads =
         run_get_handler ~url ~target:"/confirm?token=step6_tok_1"
-          Earde.Handlers.confirm_email_handler
+          Earde.Auth_handlers.confirm_email_handler
       in
       Alcotest.(check int) "replay status" 200 status;
       Alcotest.(check int) "replay emits none" 0 (List.length payloads);
@@ -201,7 +201,7 @@ let signup_case =
       let* () = or_fail "pending 2" r in
       let* status, payloads =
         run_get_handler ~url ~consent:None ~target:"/confirm?token=step6_tok_2"
-          Earde.Handlers.confirm_email_handler
+          Earde.Auth_handlers.confirm_email_handler
       in
       Alcotest.(check int) "unconsented confirm status" 200 status;
       Alcotest.(check int) "unconsented emits none" 0 (List.length payloads);
@@ -221,7 +221,7 @@ let login_case =
         run_handler ~url ~target:"/login"
           ~form:
             [ ("identifier", "step6_login"); ("password", "step6 password") ]
-          Earde.Handlers.login_handler
+          Earde.Auth_handlers.login_handler
       in
       Alcotest.(check bool) "login redirects" true (Http_fixture.is_redirect status);
       (match payloads with
@@ -239,7 +239,7 @@ let login_case =
       let* status, payloads =
         run_handler ~url ~target:"/login"
           ~form:[ ("identifier", "step6_login"); ("password", "wrong") ]
-          Earde.Handlers.login_handler
+          Earde.Auth_handlers.login_handler
       in
       Alcotest.(check int) "failed login status" 200 status;
       Alcotest.(check int) "failed login emits none" 0 (List.length payloads);
@@ -264,7 +264,7 @@ let join_case =
         run_handler ~url ~session ~target:"/join"
           ~form:
             [ ("community_id", string_of_int pub); ("redirect_to", "/feed") ]
-          Earde.Handlers.join_community_handler
+          Earde.Membership_handlers.join_community_handler
       in
       Alcotest.(check bool) "join redirects" true (Http_fixture.is_redirect status);
       (match payloads with
@@ -301,7 +301,7 @@ let join_case =
         run_handler ~url ~session ~target:"/join"
           ~form:
             [ ("community_id", string_of_int priv); ("redirect_to", "/feed") ]
-          Earde.Handlers.join_community_handler
+          Earde.Membership_handlers.join_community_handler
       in
       Alcotest.(check int) "private join 404" 404 status;
       Alcotest.(check int) "private join emits none" 0 (List.length payloads);
@@ -310,7 +310,7 @@ let join_case =
         run_handler ~url ~session ~consent:(Some "denied") ~target:"/join"
           ~form:
             [ ("community_id", string_of_int pub); ("redirect_to", "/feed") ]
-          Earde.Handlers.join_community_handler
+          Earde.Membership_handlers.join_community_handler
       in
       Alcotest.(check bool) "denied join still redirects" true
         (Http_fixture.is_redirect status);
@@ -334,7 +334,7 @@ let leave_case =
         run_handler ~url ~session ~target:"/leave"
           ~form:
             [ ("community_id", string_of_int cid); ("redirect_to", "/feed") ]
-          Earde.Handlers.leave_community_handler
+          Earde.Membership_handlers.leave_community_handler
       in
       let* status, payloads = leave () in
       Alcotest.(check bool) "leave redirects" true (Http_fixture.is_redirect status);
@@ -371,7 +371,7 @@ let visibility_case =
       let router =
         Dream.router
           [ Dream.post "/c/:slug/settings/visibility"
-              Earde.Handlers.update_community_visibility_handler
+              Earde.Community_settings_handlers.update_community_visibility_handler
           ]
       in
       let submit ?consent ~session value =
@@ -459,7 +459,7 @@ let chat_case =
           ~form:
             [ ("community_slug", "step6-chat"); ("channel_slug", chslug);
               ("content", content) ]
-          Earde.Handlers.send_message_handler
+          Earde.Chat_handlers.send_message_handler
       in
       let* status, payloads = send "step6 hello redirect" in
       Alcotest.(check bool) "redirect mode redirects" true
@@ -521,7 +521,7 @@ let post_case =
       in
       let* status, payloads =
         run_handler ~url ~session ~multipart:true ~target:"/create-post"
-          ~form Earde.Handlers.create_post_handler
+          ~form Earde.Post_handlers.create_post_handler
       in
       Alcotest.(check bool) "post redirects" true (Http_fixture.is_redirect status);
       (match payloads with
@@ -546,7 +546,7 @@ let post_case =
             [ ("user_id", string_of_int other);
               ("username", "step6_stranger") ]
           ~multipart:true ~target:"/create-post" ~form
-          Earde.Handlers.create_post_handler
+          Earde.Post_handlers.create_post_handler
       in
       Alcotest.(check int) "non-member status" 200 status;
       Alcotest.(check int) "non-member emits none" 0 (List.length payloads);
@@ -573,7 +573,7 @@ let comment_case =
         run_handler ~url ~session ~target:"/create-comment"
           ~form:
             [ ("content", "step6 comment"); ("post_id", string_of_int pid) ]
-          Earde.Handlers.create_comment_handler
+          Earde.Comment_handlers.create_comment_handler
       in
       Alcotest.(check bool) "comment redirects" true (Http_fixture.is_redirect status);
       (match payloads with
@@ -626,7 +626,7 @@ let promote_case =
         Dream.router
           [ Dream.post
               "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
-              Earde.Handlers.start_thread_create_handler
+              Earde.Start_thread_handlers.start_thread_create_handler
           ]
       in
       let* status, payloads =
@@ -690,7 +690,7 @@ let create_community_case =
           ~form:
             [ ("name", "step6-created"); ("slug", "step6-created");
               ("section_count", "0") ]
-          Earde.Handlers.create_community_handler
+          Earde.Community_handlers.create_community_handler
       in
       Alcotest.(check bool) "creation redirects" true (Http_fixture.is_redirect status);
       let* cid = C.find_opt q_community_id_by_slug "step6-created" in
@@ -737,7 +737,7 @@ let update_settings_case =
       let* status, payloads =
         run_handler ~url ~session:admin_session ~multipart:true
           ~target:"/update-community" ~form
-          Earde.Handlers.update_community_handler
+          Earde.Community_settings_handlers.update_community_handler
       in
       Alcotest.(check bool) "update redirects" true (Http_fixture.is_redirect status);
       (match payloads with
@@ -763,7 +763,7 @@ let update_settings_case =
           ~session:
             [ ("user_id", string_of_int other); ("username", "step6_nobody") ]
           ~multipart:true ~target:"/update-community" ~form
-          Earde.Handlers.update_community_handler
+          Earde.Community_settings_handlers.update_community_handler
       in
       Alcotest.(check int) "forbidden status" 403 status;
       Alcotest.(check int) "forbidden emits none" 0 (List.length payloads);
@@ -797,7 +797,7 @@ let delete_account_case =
             in
             let csrf = Dream.csrf_token req in
             Dream.set_body req (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
-            Earde.Handlers.delete_account_handler req
+            Earde.Account_handlers.delete_account_handler req
           in
           let request =
             Dream.request ~method_:`POST ~target:"/delete-account"
@@ -917,7 +917,7 @@ let delete_account_avatar_case =
           let* () = Dream.set_session_field req "username" name in
           let csrf = Dream.csrf_token req in
           Dream.set_body req (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
-          Earde.Handlers.delete_account_handler req
+          Earde.Account_handlers.delete_account_handler req
         in
         pipeline
           (Dream.request ~method_:`POST ~target:"/delete-account"

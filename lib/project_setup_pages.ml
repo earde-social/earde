@@ -520,6 +520,6 @@ let project_setup_page ?user ?request ~state ~feedback () =
       heading (feedback_html feedback) (state_html ?request state)
   in
   (* noindex: a session-dependent setup surface — not for search indexes. *)
-  Components.launch_onboarding_page ?user ?request ~noindex:true
+  Page_shell.launch_onboarding_page ?user ?request ~noindex:true
     ~stepper:(stepper_html state) ~page_class:"launch-project-new"
     ~title:"Create a project" ~content:body ()

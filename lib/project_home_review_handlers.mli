@@ -1,6 +1,5 @@
 (** HTTP layer for the moderator review of pending project-home requests
-    (GET /c/:slug/project-home-requests and the accept/reject POSTs), kept
-    out of the legacy [Handlers] macro-module. All three handlers derive
+    (GET /c/:slug/project-home-requests and the accept/reject POSTs). All three handlers derive
     access only from the injected closed mode and the Dream session (a
     [user_id] counts only when it parses as a positive integer;
     [is_admin = "true"] matters only alongside a valid user), through the

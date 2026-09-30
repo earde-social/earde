@@ -1,5 +1,4 @@
-(* HTTP layer for the shared-threads workflow. Kept out of the legacy
-   Handlers macro-module per the feature-module guideline.
+(* HTTP layer for the shared-threads workflow.
 
    The shape of every handler is the same: session gate, route subjects,
    authorized read-model load (which is where the policy — author-while-
@@ -79,13 +78,13 @@ let login_redirect () = clean_redirect "/login"
    route value all stay indistinguishable. *)
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Found"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
        ~message:"This page does not exist." ~alert_type:"error"
        ~return_url:"/" request)
 
 let bad_request_page request =
   Dream.respond ~status:`Bad_Request ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Form Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Form Error"
        ~message:"There was a problem with your submission. Please try again."
        ~alert_type:"error" ~return_url:"/" request)
 
@@ -94,7 +93,7 @@ let bad_request_page request =
    the page. *)
 let server_error_page request =
   Dream.respond ~status:`Internal_Server_Error ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Error"
        ~message:"Something went wrong on our side. Please try again."
        ~alert_type:"error" ~return_url:"/" request)
 
@@ -179,7 +178,7 @@ let share_state_of_view view : Pages_sth.share_state =
     share_origin_name = Share.view_origin_community_name view;
     share_origin_slug = origin_slug;
     share_thread_path =
-      Components.canonical_thread_path origin_slug (Share.view_post_id view)
+      Post_cards.canonical_thread_path origin_slug (Share.view_post_id view)
         (Share.view_post_title view);
     share_candidates =
       List.map
@@ -215,7 +214,7 @@ let pending_entry_of_read row : Pages_sth.pending_entry =
     Pages_sth.pending_id = Int64.to_string (Manage.pending_placement_id row);
     pending_title = Manage.pending_post_title row;
     pending_thread_path =
-      Components.canonical_thread_path
+      Post_cards.canonical_thread_path
         (Manage.counterpart_slug counterpart)
         (Manage.pending_post_id row)
         (Manage.pending_post_title row);
@@ -234,7 +233,7 @@ let pending_entry_of_read_own ~community_slug row : Pages_sth.pending_entry =
     Pages_sth.pending_id = Int64.to_string (Manage.pending_placement_id row);
     pending_title = Manage.pending_post_title row;
     pending_thread_path =
-      Components.canonical_thread_path community_slug
+      Post_cards.canonical_thread_path community_slug
         (Manage.pending_post_id row)
         (Manage.pending_post_title row);
     pending_counterpart_name = Manage.counterpart_name counterpart;
@@ -249,7 +248,7 @@ let accepted_entry_of_read ~thread_slug row : Pages_sth.accepted_entry =
     Pages_sth.accepted_id = Int64.to_string (Manage.accepted_placement_id row);
     accepted_title = Manage.accepted_post_title row;
     accepted_thread_path =
-      Components.canonical_thread_path thread_slug
+      Post_cards.canonical_thread_path thread_slug
         (Manage.accepted_post_id row)
         (Manage.accepted_post_title row);
     accepted_counterpart_name = Manage.counterpart_name counterpart;
@@ -320,7 +319,7 @@ let load_launch_shell request ~user_id ~canonical_slug ~can_manage
             | Error _ -> Lwt.return []
           in
           let sidebar =
-            Pages.launch_knowledge_sidebar ~community ~channels ~sections
+            Community_pages.launch_knowledge_sidebar ~community ~channels ~sections
               ~settings_active ~show_visibility_note:false ~can_manage ()
           in
           Lwt.return (Some (community, rail_communities, sidebar))
@@ -421,7 +420,7 @@ let share_request_result request ~user_id ~community_slug ~post_id ~view =
            (Uri.to_string
               (Uri.make
                  ~path:
-                   (Components.canonical_thread_path
+                   (Post_cards.canonical_thread_path
                       (Share.view_origin_community_slug view)
                       post_id
                       (Share.view_post_title view)
@@ -732,7 +731,7 @@ let withdraw_refused request ~user_id ~community_slug ~grant ~feedback ~status
           (* A requester with no remaining surface still gets a truthful,
              payload-free answer. *)
           Dream.respond ~status ~headers:page_headers
-            (Pages.msg_page ?user:(session_user request) ~title:"Unavailable"
+            (Site_pages.msg_page ?user:(session_user request) ~title:"Unavailable"
                ~message:
                  "That sharing request is no longer pending. Nothing was \
                   changed."

@@ -77,7 +77,7 @@ let login_pure_suite = [ dummy_fixture_case; authenticate_case ]
 
 let limiter_app ~check ~cleanup ~hits ?(inner = fun _ -> incr hits; Dream.respond "b2-inner-ran") () =
   Dream.set_secret "b2-limiter-secret" @@ Dream.memory_sessions
-  @@ H.Rate_limit.make_middleware ~check ~cleanup (fun req -> inner req)
+  @@ Earde.Rate_limit_middleware.make_middleware ~check ~cleanup (fun req -> inner req)
 
 let run_limited app ~target =
   let* response = app (Dream.request ~method_:`POST ~target "") in
@@ -385,26 +385,26 @@ let build_pipeline url =
              match Dream.session_field req "user_id" with
              | Some uid -> Dream.respond ("uid:" ^ uid)
              | None -> Dream.respond "anon");
-         Dream.post "/signup" (fun req -> H.make_signup_handler ~mail:(mail ()) req);
-         Dream.post "/forgot-password" (fun req -> H.make_forgot_password_handler ~mail:(mail ()) req);
-         Dream.post "/login" (H.make_login_handler ~verify:counting_verifier);
-         Dream.post "/login-prod" H.login_handler;
-         Dream.get "/confirm-email" H.confirm_email_handler;
-         Dream.post "/reset-password" H.reset_password_handler;
+         Dream.post "/signup" (fun req -> Earde.Auth_handlers.make_signup_handler ~mail:(mail ()) req);
+         Dream.post "/forgot-password" (fun req -> Earde.Auth_handlers.make_forgot_password_handler ~mail:(mail ()) req);
+         Dream.post "/login" (Earde.Auth_handlers.make_login_handler ~verify:counting_verifier);
+         Dream.post "/login-prod" Earde.Auth_handlers.login_handler;
+         Dream.get "/confirm-email" Earde.Auth_handlers.confirm_email_handler;
+         Dream.post "/reset-password" Earde.Auth_handlers.reset_password_handler;
          (* The production limiter in front of real handlers, at paths whose
             buckets this suite owns. *)
          Dream.post "/b2-rl/login"
-           (H.Rate_limit.middleware (fun req ->
+           (Earde.Rate_limit_middleware.middleware (fun req ->
                 incr limited_hits;
-                H.make_login_handler ~verify:counting_verifier req));
+                Earde.Auth_handlers.make_login_handler ~verify:counting_verifier req));
          Dream.post "/b2-rl/forgot"
-           (H.Rate_limit.middleware (fun req ->
+           (Earde.Rate_limit_middleware.middleware (fun req ->
                 incr limited_hits;
-                H.make_forgot_password_handler ~mail:(mail ()) req));
+                Earde.Auth_handlers.make_forgot_password_handler ~mail:(mail ()) req));
          Dream.post "/b2-rl/signup"
-           (H.Rate_limit.middleware (fun req ->
+           (Earde.Rate_limit_middleware.middleware (fun req ->
                 incr limited_hits;
-                H.make_signup_handler ~mail:(mail ()) req)) ]
+                Earde.Auth_handlers.make_signup_handler ~mail:(mail ()) req)) ]
 
 let pipeline url =
   match Hashtbl.find_opt pipelines url with

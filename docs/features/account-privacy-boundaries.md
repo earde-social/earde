@@ -164,7 +164,7 @@ requesting another reset link.
 
 ## Shared rate limiter
 
-`Handlers.Rate_limit.middleware` fronts every sensitive POST in
+`Rate_limit_middleware.middleware` fronts every sensitive POST in
 `bin/main.ml` (login, signup, reset request, and the project/community
 management mutations). It now fails closed: only a positive Allowed decision
 reaches the wrapped handler. A lookup error, a rejected promise or a pool

@@ -390,9 +390,9 @@ let pipeline ?session_user_id ~url () =
            in
            handler request)
   @@ Dream.router
-       [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+       [ Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
          Dream.get "/c/:slug/network"
-           Earde.Handlers.community_network_handler;
+           Earde.Community_handlers.community_network_handler;
          Dream.get "/c/:slug/settings/connections"
            Earde.Community_connections_handlers
            .make_connections_page_handler ]

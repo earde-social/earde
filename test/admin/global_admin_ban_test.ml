@@ -123,11 +123,11 @@ let build_pipeline ~url =
        [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
          Dream.get "/mint-expired" (fun req ->
              Dream.respond (Dream.csrf_token ~valid_for:(-60.) req));
-         Dream.get "/u/:username" Earde.Handlers.view_profile_handler;
-         Dream.get "/admin" Earde.Handlers.admin_dashboard_handler;
-         Dream.post "/admin/ban/user/:id" Earde.Handlers.ban_user_handler;
+         Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler;
+         Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler;
+         Dream.post "/admin/ban/user/:id" Earde.Admin_handlers.ban_user_handler;
          Dream.post "/admin/unban/user/:id"
-           Earde.Handlers.unban_user_global_handler
+           Earde.Admin_handlers.unban_user_global_handler
        ]
 
 let pipeline_for ~url =

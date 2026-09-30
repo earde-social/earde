@@ -166,7 +166,7 @@ let render_settings ?(panel = "visibility") ~community ~is_admin ~is_top_mod
     @@ fun req ->
     captured :=
       Some
-        (Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+        (Earde.Community_settings_pages.community_settings_page ~is_admin ~is_top_mod
            ~open_reports_count:0 ~community ~mods:[] ~banned_users:[]
            ~members:[] ~sections:[] ~channels:[] req);
     Dream.html ""
@@ -406,7 +406,7 @@ let build_pipeline ~url =
   @@ Dream.router
        [ Dream.get route_pattern (fun req -> make ~mode:Ob.Public req);
          Dream.get "/c/:slug/settings"
-           Earde.Handlers.community_settings_handler
+           Earde.Community_settings_handlers.community_settings_handler
        ]
 
 let pipeline_for ~url =

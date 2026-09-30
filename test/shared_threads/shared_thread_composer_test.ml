@@ -153,7 +153,7 @@ let render_composer ?(share_candidates = []) () =
     @@ fun req ->
     captured :=
       Some
-        (Earde.Pages.new_post_form ~share_candidates [] composer_community
+        (Earde.Post_pages.new_post_form ~share_candidates [] composer_community
            req);
     Dream.html ""
   in
@@ -451,7 +451,7 @@ let composer_share_success_case =
           in
           let* post = find conn "created" q_post_id_by_title "Sth cd shared" in
           let canonical =
-            Earde.Components.canonical_thread_path "sth-cd-o" post
+            Earde.Post_cards.canonical_thread_path "sth-cd-o" post
               "Sth cd shared"
           in
           Shared_thread_http_fixture.check_location "PRG to the canonical origin thread"
@@ -549,7 +549,7 @@ let composer_share_sectioned_case =
       in
       let* post = find conn "created" q_post_id_by_title "Sth ce sectioned" in
       let canonical =
-        Earde.Components.canonical_thread_path "sth-ce-o" post
+        Earde.Post_cards.canonical_thread_path "sth-ce-o" post
           "Sth ce sectioned"
       in
       Shared_thread_http_fixture.check_location "sectioned PRG" (canonical ^ "?shared=requested")
@@ -569,7 +569,7 @@ let composer_share_sectioned_case =
              Shared_thread_http_fixture.seed_accept conn ~reviewer:dtop ~placement ~destination:d ()
            in
            let dest =
-             Earde.Components.canonical_thread_path "sth-ce-d" post
+             Earde.Post_cards.canonical_thread_path "sth-ce-d" post
                "Sth ce sectioned"
            in
            let anon = Shared_thread_http_fixture.app_pipeline ~url () in
@@ -600,7 +600,7 @@ let partial_attempt conn ~url ~author ~origin_slug ~community ~pal label
   in
   let* post = find conn (label ^ ": created") q_post_id_by_title title in
   let canonical =
-    Earde.Components.canonical_thread_path origin_slug post title
+    Earde.Post_cards.canonical_thread_path origin_slug post title
   in
   Shared_thread_http_fixture.check_location (label ^ ": partial-success PRG")
     (canonical ^ "?shared=failed")
@@ -699,7 +699,7 @@ let composer_store_failure_case =
                   find conn "created" q_post_id_by_title "Sth cf stormy"
                 in
                 let canonical =
-                  Earde.Components.canonical_thread_path "sth-cf-o" post
+                  Earde.Post_cards.canonical_thread_path "sth-cf-o" post
                     "Sth cf stormy"
                 in
                 Shared_thread_http_fixture.check_location "store failure is partial success"
@@ -910,7 +910,7 @@ let shared_with_copy_case =
   Alcotest.test_case
     "shared_with_html: exact launch copy and escaping for 0/1/n destinations"
     `Quick (fun () ->
-      let render = Earde.Components.shared_with_html in
+      let render = Earde.Post_cards.shared_with_html in
       Alcotest.(check string) "empty renders nothing" "" (render []);
       Alcotest.(check string) "one destination"
         "<span class='sth-shared-from'>&#8644; Shared with \
@@ -976,7 +976,7 @@ let origin_indicator_case =
       in
       let* () = Shared_thread_http_fixture.withdraw_seed conn ~actor:author ~placement:plw ~origin:o in
       let canonical =
-        Earde.Components.canonical_thread_path "sth-oi-o" post
+        Earde.Post_cards.canonical_thread_path "sth-oi-o" post
           "Sth oi thread"
       in
       let anon = Shared_thread_http_fixture.app_pipeline ~url () in
@@ -1009,7 +1009,7 @@ let origin_indicator_case =
       let check_absent title p =
         let* _, body =
           Shared_thread_http_fixture.get
-            ~target:(Earde.Components.canonical_thread_path "sth-oi-o" p title)
+            ~target:(Earde.Post_cards.canonical_thread_path "sth-oi-o" p title)
             anon
         in
         must_not body "Shared with";
@@ -1032,7 +1032,7 @@ let origin_indicator_case =
       let* _, body =
         Shared_thread_http_fixture.get
           ~target:
-            (Earde.Components.canonical_thread_path "sth-oi-d" post
+            (Earde.Post_cards.canonical_thread_path "sth-oi-d" post
                "Sth oi thread")
           anon
       in

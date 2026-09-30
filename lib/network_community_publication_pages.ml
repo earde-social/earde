@@ -264,6 +264,6 @@ let network_community_publication_page ?user ?request ~community ~project
       (actions_html ?request ~community ~values ())
   in
   (* noindex: an authorized-only setup surface — not for search indexes. *)
-  Components.launch_onboarding_page ?user ?request ~noindex:true
+  Page_shell.launch_onboarding_page ?user ?request ~noindex:true
     ~stepper:stepper_html ~page_class:"launch-community-publication"
     ~title:"Complete setup and publish" ~content:body ()

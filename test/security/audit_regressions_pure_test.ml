@@ -35,7 +35,7 @@ let msg_page_hostile_return_url =
   case "msg_page: a quote+markup return_url emits no raw tag" (fun () ->
       let payload = "/c/x'><svg onload=alert(document.domain)>/t/z" in
       let body =
-        Earde.Pages.msg_page ~title:"Not Found" ~message:"This community does not exist."
+        Earde.Site_pages.msg_page ~title:"Not Found" ~message:"This community does not exist."
           ~alert_type:"error" ~return_url:payload (req "/")
       in
       (* The document's own alert glyph is an <svg>, so the assertion is on
@@ -54,7 +54,7 @@ let msg_page_rejects_foreign_targets =
   case "msg_page: javascript:, protocol-relative and foreign URLs collapse"
     (fun () ->
       let render return_url =
-        Earde.Pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
+        Earde.Site_pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
           ~return_url (req "/")
       in
       List.iter
@@ -77,7 +77,7 @@ let msg_page_preserves_internal_paths =
       List.iter
         (fun path ->
           let body =
-            Earde.Pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
+            Earde.Site_pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
               ~return_url:path (req "/")
           in
           Security_fixture.must ("internal " ^ path) body (Printf.sprintf "href='%s'" path))
@@ -121,7 +121,7 @@ let js_attr_escaping =
 
 let username_syntax =
   case "is_valid_new_username: route-safe ASCII only" (fun () ->
-      let ok = Earde.Handlers.is_valid_new_username in
+      let ok = Earde.Auth_handlers.is_valid_new_username in
       List.iter
         (fun name ->
           Alcotest.(check bool) ("accepted: " ^ name) true (ok name))
@@ -140,7 +140,7 @@ let hostile_username_profile_render =
       let hostile = "x'><svg onload=alert(1)>" in
       let render ~is_admin ~viewer =
         render_with_session ("/u/" ^ hostile) (fun r ->
-            Earde.Pages.user_profile_page ?user:viewer ~is_admin
+            Earde.Account_pages.user_profile_page ?user:viewer ~is_admin
               ~is_globally_banned:false ~profile_id:7 ~admin_usernames:[]
               ~moderated_communities:[] ~active_tab:"posts" [] hostile
               "2026-01-01 00:00:00" (Some "a bio") None 0 [] [] [] r)
@@ -176,7 +176,7 @@ let ordinary_username_profile_render =
     (fun () ->
       let body =
         render_with_session "/u/alice" (fun r ->
-            Earde.Pages.user_profile_page ~user:"root" ~is_admin:true
+            Earde.Account_pages.user_profile_page ~user:"root" ~is_admin:true
               ~is_globally_banned:false ~profile_id:9 ~admin_usernames:[]
               ~moderated_communities:[] ~active_tab:"posts" [] "alice"
               "2026-01-01 00:00:00" None None 0 [] [] [] r)
@@ -194,7 +194,7 @@ let settings_form_has_no_avatar_input =
   case "settings_page: no existing_avatar_url field is rendered" (fun () ->
       let body =
         render_with_session "/settings" (fun r ->
-            Earde.Pages.settings_page ~user:"alice" (Some "bio")
+            Earde.Account_pages.settings_page ~user:"alice" (Some "bio")
               (Some "/static/uploads/earde_1_2.webp") r)
       in
       Security_fixture.must_not "settings form" body "existing_avatar_url";

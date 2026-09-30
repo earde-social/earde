@@ -23,8 +23,8 @@ let css = Source_census.read "static/css/earde.css"
    window below is generous rather than exact. *)
 let community_shell_classes =
   let builders =
-    [ "Components.launch_community_page"
-    ; "Components.launch_community_surface_page" ]
+    [ "Community_shell.launch_community_page"
+    ; "Community_shell.launch_community_surface_page" ]
   in
   let class_after source start =
     let marker = "~page_class:\"" in

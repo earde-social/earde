@@ -550,7 +550,7 @@ let identity_middleware handler request =
    reach the handler over a pool the real limiter (which fails closed)
    cannot query. *)
 let allowing_limiter =
-  Earde.Handlers.Rate_limit.make_middleware
+  Earde.Rate_limit_middleware.make_middleware
     ~check:(fun _ ~ip:_ ~endpoint:_ -> Lwt.return (Ok `Allowed))
     ~cleanup:ignore
 
@@ -573,13 +573,13 @@ let build_pipeline_with ~limit ~url =
          Dream.get "/projects/:slug/request-home" (fun req ->
              Earde.Project_home_request_handlers
              .make_project_home_choice_handler ~mode:Ob.Public req);
-         Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+         Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
          Dream.get "/c/:slug/settings"
-           Earde.Handlers.community_settings_handler
+           Earde.Community_settings_handlers.community_settings_handler
        ]
 
 let build_pipeline ~url =
-  build_pipeline_with ~limit:Earde.Handlers.Rate_limit.middleware ~url
+  build_pipeline_with ~limit:Earde.Rate_limit_middleware.middleware ~url
 
 let pipeline_for ~url =
   match !shared_pipeline with

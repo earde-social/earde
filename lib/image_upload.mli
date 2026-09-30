@@ -6,7 +6,7 @@
     command construction are unit-tested without ImageMagick installed and
     without a hostile payload ever reaching a decoder. The Lwt side (writing
     the temporary file, running the process, moving the result into
-    [static/uploads]) lives in [Handlers.process_image_upload], which calls
+    [static/uploads]) lives in [Image_processing.process_image_upload], which calls
     into this module for every decision. *)
 
 (** The surface an upload is for. Only the resize geometry differs; the

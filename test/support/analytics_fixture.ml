@@ -179,7 +179,7 @@ let consent_header = function
 (* Request-free launch document: the same shared analytics assets without any
    session, for the emission/config cases that must not depend on middleware. *)
 let launch_doc ?analytics_community () =
-  Earde.Components.launch_app_page ?analytics_community
+  Earde.Page_shell.launch_app_page ?analytics_community
     ~page_class:"launch-feed" ~title:"T" ~content:"<p>body</p>" ()
 
 (* Full production-shaped raw values (dummy secrets), installable so

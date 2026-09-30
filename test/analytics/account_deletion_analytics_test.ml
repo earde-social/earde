@@ -332,7 +332,7 @@ let run_delete_account ~url ~configure ?(consent = Some "granted")
         let* () = Dream.set_session_field req "username" "step7_deleting" in
         let csrf = Dream.csrf_token req in
         Dream.set_body req (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
-        Earde.Handlers.delete_account_handler req
+        Earde.Account_handlers.delete_account_handler req
       in
       let request =
         Dream.request ~method_:`POST ~target:"/delete-account"

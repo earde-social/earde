@@ -149,27 +149,27 @@ let census_community ~visibility : Earde.Community_types.community =
 let launch_documents () =
   let community = census_community ~visibility:Earde.Community_types.Community_public in
   [ ( "launch_entry_page"
-    , Earde.Components.launch_entry_page ~page_class:"launch-bring"
+    , Earde.Page_shell.launch_entry_page ~page_class:"launch-bring"
         ~title:"T" ~content:"B" () )
   ; ( "launch_auth_page"
-    , Earde.Components.launch_auth_page ~page_class:"launch-login" ~title:"T"
+    , Earde.Page_shell.launch_auth_page ~page_class:"launch-login" ~title:"T"
         ~content:"B" () )
   ; ( "launch_message_page"
-    , Earde.Components.launch_message_page ~title:"T" ~content:"B" () )
+    , Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" () )
   ; ( "launch_app_page (anonymous)"
-    , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+    , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
         ~content:"B" () )
   ; ( "launch_app_page (member)"
-    , Earde.Components.launch_app_page ~user:"alice"
+    , Earde.Page_shell.launch_app_page ~user:"alice"
         ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
   ; ( "launch_onboarding_page"
-    , Earde.Components.launch_onboarding_page
+    , Earde.Page_shell.launch_onboarding_page
         ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
   ; ( "launch_community_page"
-    , Earde.Components.launch_community_page ~community ~sidebar:"S"
+    , Earde.Community_shell.launch_community_page ~community ~sidebar:"S"
         ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
   ; ( "launch_community_surface_page"
-    , Earde.Components.launch_community_surface_page ~community ~sidebar:"S"
+    , Earde.Community_shell.launch_community_surface_page ~community ~sidebar:"S"
         ~page_class:"launch-community-channel" ~title:"T"
         ~main_el:"<main class='cs-main'>B</main>" () )
   ]
@@ -209,17 +209,17 @@ let surviving_routes_case =
           "Dream.get \"/\" (fun request -> Dream.redirect request \"/feed\")"
           (* 8. legacy /all redirect *)
         ; "Dream.get \"/all\" (fun request -> Dream.redirect request \"/feed\")"
-        ; "Dream.get \"/feed\" Earde.Handlers.feed_handler"
+        ; "Dream.get \"/feed\" Earde.Public_handlers.feed_handler"
           (* 9. canonical /p/:id + its converted fallback *)
-        ; "Dream.get \"/p/:id\" Earde.Handlers.view_post_handler"
+        ; "Dream.get \"/p/:id\" Earde.Post_handlers.view_post_handler"
           (* 10. /admin and its global ban/unban actions *)
-        ; "Dream.get  \"/admin\" Earde.Handlers.admin_dashboard_handler"
-        ; "Dream.post \"/admin/ban/user/:id\" Earde.Handlers.ban_user_handler"
+        ; "Dream.get  \"/admin\" Earde.Admin_handlers.admin_dashboard_handler"
+        ; "Dream.post \"/admin/ban/user/:id\" Earde.Admin_handlers.ban_user_handler"
         ; "Dream.post \"/admin/unban/user/:id\" \
-           Earde.Handlers.unban_user_global_handler"
+           Earde.Admin_handlers.unban_user_global_handler"
           (* explicitly retained by the product decision *)
-        ; "Dream.get \"/_debug/state\" Earde.Handlers.debug_state_handler"
-        ; "Dream.get \"/new-community\" Earde.Handlers.new_community_page"
+        ; "Dream.get \"/_debug/state\" Earde.Admin_handlers.debug_state_handler"
+        ; "Dream.get \"/new-community\" Earde.Community_handlers.new_community_page"
         ])
 
 (* --- 14. a removed route reaches the normal unknown-route response ----- *)
@@ -243,7 +243,7 @@ let admin_no_kpi_case =
     (fun () ->
       let html =
         Http_fixture.with_session_request ~target:"/admin" (fun req ->
-            Earde.Pages.admin_dashboard_page ~user:"root"
+            Earde.Admin_pages.admin_dashboard_page ~user:"root"
               ~signups_enabled:true ~turnstile:`Configured
               ~brevo_configured:true ~recent_users:[] ~pending:[]
               ~banned_users:[] req)
@@ -264,7 +264,7 @@ let msg_page_case =
     (fun () ->
       (* signature retention *)
       ignore
-        (Earde.Pages.msg_page
+        (Earde.Site_pages.msg_page
           : ?user:string ->
             ?auth:bool ->
             title:string ->
@@ -274,7 +274,7 @@ let msg_page_case =
             Dream.request ->
             string);
       let render ?auth () =
-        Earde.Pages.msg_page ?auth ~title:"T" ~message:"M"
+        Earde.Site_pages.msg_page ?auth ~title:"T" ~message:"M"
           ~alert_type:"success" ~return_url:"/login"
           (Dream.request ~method_:`GET ~target:"/login" "")
       in
@@ -291,7 +291,7 @@ let msg_page_case =
 let single_behavior_script_case =
   lc_case "launch helpers keep exactly one behavior-script definition"
     (fun () ->
-      let components = List.assoc "lib/components.ml" Source_census.production_sources in
+      let components = Source_census.launch_shells in
       List.iter
         (fun (label, needle) ->
           Alcotest.(check int)

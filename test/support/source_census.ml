@@ -30,3 +30,24 @@ let absent_everywhere label needle =
       if Html_assert.contains body needle then
         Alcotest.failf "%s: %s still contains %S" label path needle)
     production_sources
+
+(* The implementations only: interfaces repeat names, and dune leaves a
+   .pp.ml beside each preprocessed source, the same code twice. *)
+let implementations =
+  List.filter
+    (fun (path, _) ->
+      Filename.check_suffix path ".ml"
+      && not (Filename.check_suffix path ".pp.ml"))
+    production_sources
+
+(* Occurrences of [needle] across every implementation, so a definition or
+   call site counts wherever the module layout puts it. *)
+let count_everywhere needle =
+  List.fold_left
+    (fun acc (_, body) -> acc + Html_assert.count_sub body needle)
+    0 implementations
+
+(* The modules that build the launch documents: their top bars, shared
+   scripts and badge calls. *)
+let launch_shells =
+  String.concat "\n" [ read "lib/page_shell.ml"; read "lib/community_shell.ml" ]

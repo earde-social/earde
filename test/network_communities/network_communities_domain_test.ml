@@ -57,7 +57,7 @@ let nc_valid_case name expected ~is_network_community ~onboarding_state
         (NC.lifecycle_state_valid ~is_network_community ~onboarding_state
            ~visibility ~indexable ~discoverable))
 
-(* === Settings-flow lifecycle gate (Handlers.visibility_update_rejection) ===
+(* === Settings-flow lifecycle gate (Community_settings_handlers.visibility_update_rejection) ===
    The exact decision function update_community_visibility_handler consults on
    the loaded record before writing. These prove the settings flow invokes the
    lifecycle rule; the exhaustive matrix lives in network_visibility_change. *)
@@ -74,7 +74,7 @@ let vis_gate_allowed name ~is_network_community ~onboarding_state ~visibility
       let community =
         vis_gate_community ~is_network_community ~onboarding_state ~visibility in
       match
-        Earde.Handlers.visibility_update_rejection community
+        Earde.Community_settings_handlers.visibility_update_rejection community
           ~requested_visibility
       with
       | None -> ()
@@ -86,7 +86,7 @@ let vis_gate_rejected name ~is_network_community ~onboarding_state ~visibility
       let community =
         vis_gate_community ~is_network_community ~onboarding_state ~visibility in
       match
-        Earde.Handlers.visibility_update_rejection community
+        Earde.Community_settings_handlers.visibility_update_rejection community
           ~requested_visibility
       with
       | Some message ->

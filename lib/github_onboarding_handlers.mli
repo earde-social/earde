@@ -1,8 +1,7 @@
 (** HTTP layer for the GitHub App installation flow
     (POST /integrations/github/install/start,
     GET /integrations/github/install/return, and
-    GET /integrations/github/authorize/callback), kept out of the legacy
-    [Handlers] macro-module. *)
+    GET /integrations/github/authorize/callback). *)
 
 val make_start_installation_handler :
   mode:Project_onboarding.mode ->

@@ -776,7 +776,7 @@ let pipeline_for ~url =
                Dream.get "/mint" (fun req ->
                    Dream.respond (Dream.csrf_token req));
                Dream.get "/c/:slug/settings"
-                 Earde.Handlers.community_settings_handler;
+                 Earde.Community_settings_handlers.community_settings_handler;
                Dream.get "/projects/:slug/request-home" (fun req ->
                    Earde.Project_home_request_handlers
                    .make_project_home_choice_handler ~mode:Ob.Public req);

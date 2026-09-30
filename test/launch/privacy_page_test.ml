@@ -18,7 +18,7 @@ let render_privacy ?user () =
     Lwt_main.run
       (Dream.memory_sessions
          (fun req ->
-           rendered := Earde.Pages.privacy_page ?user req;
+           rendered := Earde.Site_pages.privacy_page ?user req;
            Dream.html "")
          (Dream.request ~method_:`GET ~target:"/privacy" ""))
   in
@@ -198,7 +198,7 @@ let signup_consent_link_case =
         Lwt_main.run
           (Dream.memory_sessions
              (fun req ->
-               rendered := Earde.Pages.signup_form req;
+               rendered := Earde.Auth_pages.signup_form req;
                Dream.html "")
              (Dream.request ~method_:`GET ~target:"/signup" ""))
       in

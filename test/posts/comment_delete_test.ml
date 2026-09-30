@@ -1,4 +1,4 @@
-module CD = Earde.Handlers.Comment_delete
+module CD = Earde.Comment_handlers.Comment_delete
 
 (* /delete-comment authorization matrix — pure. The decision function takes no
    community id at all: the old handler trusted a hidden community_id form field

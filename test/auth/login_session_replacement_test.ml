@@ -105,15 +105,15 @@ let make_client ~url ~poison_fields =
   let pipeline =
     Dream.sql_pool url @@ Dream.memory_sessions
     @@ Dream.router
-         [ Dream.get "/login" Earde.Handlers.login_page
-         ; Dream.post "/login" (with_form Earde.Handlers.login_handler)
-         ; Dream.post "/logout" Earde.Handlers.logout_handler
-         ; Dream.get "/confirm" Earde.Handlers.confirm_email_handler
-         ; Dream.get "/admin" Earde.Handlers.admin_dashboard_handler
+         [ Dream.get "/login" Earde.Auth_handlers.login_page
+         ; Dream.post "/login" (with_form Earde.Auth_handlers.login_handler)
+         ; Dream.post "/logout" Earde.Auth_handlers.logout_handler
+         ; Dream.get "/confirm" Earde.Auth_handlers.confirm_email_handler
+         ; Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler
          ; Dream.post "/admin/ban/user/:id"
-             (with_form Earde.Handlers.ban_user_handler)
+             (with_form Earde.Admin_handlers.ban_user_handler)
          ; Dream.post "/admin/unban/user/:id"
-             (with_form Earde.Handlers.unban_user_global_handler)
+             (with_form Earde.Admin_handlers.unban_user_global_handler)
          ; Dream.get "/whoami" (fun req ->
                Dream.respond
                  (String.concat "\n"

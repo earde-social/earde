@@ -2012,7 +2012,7 @@ let notifications_page_for ~url ~label user_id =
   let* response =
     run_get ~url
       ~session:[ ("user_id", string_of_int user_id) ]
-      ~target:"/notifications" Earde.Handlers.notifications_handler
+      ~target:"/notifications" Earde.Account_handlers.notifications_handler
   in
   Alcotest.(check int) (label ^ ": page 200") 200 (status_of response);
   let* body = Dream.body response in
@@ -2024,7 +2024,7 @@ let notifications_page_for ~url ~label user_id =
    is no count endpoint to interrogate instead. *)
 let badge_probe request =
   Dream.html
-    (Earde.Components.launch_app_page ~request ~user:"phnt_probe"
+    (Earde.Page_shell.launch_app_page ~request ~user:"phnt_probe"
        ~page_class:"launch-feed" ~title:"probe" ~content:"" ())
 
 let badge_for ~url ~label user_id expected =
@@ -2328,7 +2328,7 @@ let ui_removal_destination_case =
       (* And the destination really is open to that recipient. *)
       let community_router =
         Dream.router
-          [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler ]
+          [ Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler ]
       in
       let* response =
         run_get ~url

@@ -1,5 +1,4 @@
-(* HTTP layer for starting the GitHub App installation flow, kept out of the
-   legacy Handlers macro-module per the feature-module guideline. The handler
+(* HTTP layer for starting the GitHub App installation flow. The handler
    is a factory over the closed onboarding mode and a config loader so tests
    can inject fixed values without touching the process environment, disabled
    or rejected requests never trigger configuration reads, and configuration
@@ -27,13 +26,13 @@ let authenticated_user_id request =
 
 let not_found_page request =
   Dream.respond ~status:`Not_Found
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Found"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
        ~message:"This integration is not available." ~alert_type:"error"
        ~return_url:"/" request)
 
 let forbidden_page request =
   Dream.respond ~status:`Forbidden
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Allowed"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Allowed"
        ~message:"This request is not allowed." ~alert_type:"error"
        ~return_url:"/bring" request)
 
@@ -42,7 +41,7 @@ let forbidden_page request =
    values, URLs, or error constructors ever reach the page. *)
 let unavailable_page request =
   Dream.respond ~status:`Service_Unavailable
-    (Pages.msg_page ?user:(session_user request) ~title:"Temporarily Unavailable"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Temporarily Unavailable"
        ~message:
          "GitHub connection is temporarily unavailable. Please try again \
           later."

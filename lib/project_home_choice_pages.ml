@@ -350,6 +350,6 @@ let project_home_choice_page ?user ?request ~state ~feedback () =
       (feedback_html feedback) body
   in
   (* noindex: a steward-only workflow surface — not for search indexes. *)
-  Components.launch_onboarding_page ?user ?request ~noindex:true
+  Page_shell.launch_onboarding_page ?user ?request ~noindex:true
     ~stepper:stepper_html ~page_class:"launch-project-request-home"
     ~title:"Choose a community home" ~content:body ()

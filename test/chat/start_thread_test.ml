@@ -1,4 +1,4 @@
-module ST = Earde.Pages.Start_thread
+module ST = Earde.Chat_pages.Start_thread
 (* "Start thread from chat" pure helpers — title/body prefill, checkbox-id parsing,
    server-side selection guard. No DB, no request. *)
 

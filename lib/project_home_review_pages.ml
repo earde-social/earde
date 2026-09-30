@@ -327,7 +327,7 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
          emit is kept verbatim so the test-sliced feature fragment
          (create-shell → </main>) stays byte-identical; [user] only fed the
          legacy top bar, which this document intentionally has none of. *)
-      Components.launch_message_page ?request ~noindex:true
+      Page_shell.launch_message_page ?request ~noindex:true
         ~title:"Project home requests"
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" body) ()
   | Some shell ->
@@ -346,7 +346,7 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
                ~community:shell.community_record ~authorized:true)
           ~network_manager:true ~panel:body ()
       in
-      Components.launch_community_page ?user ?request ~noindex:true
+      Community_shell.launch_community_page ?user ?request ~noindex:true
         ~rail_communities:shell.rail_communities
         ~community:shell.community_record ~sidebar:shell.sidebar
         ~page_class:"launch-project-home-review"

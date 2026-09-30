@@ -62,11 +62,11 @@ let github_copy_census_case =
 (* --- 2. auth pages ------------------------------------------------------ *)
 
 let render_login () =
-  render_with_request ~target:"/login" (fun req -> Earde.Pages.login_form req)
+  render_with_request ~target:"/login" (fun req -> Earde.Auth_pages.login_form req)
 
 let render_signup () =
   render_with_request ~target:"/signup" (fun req ->
-      Earde.Pages.signup_form req)
+      Earde.Auth_pages.signup_form req)
 
 let auth_copy_case =
   case "auth pages carry neutral copy and the shared topbar CTA" (fun () ->
@@ -98,7 +98,7 @@ let auth_copy_case =
 
 let render_feed ?user ~is_logged_in ?(rail = []) () =
   render_with_request ~target:"/feed" (fun req ->
-      Earde.Pages.feed_page ?user ~scope:"all" ~sort_mode:"hot" ~is_logged_in
+      Earde.Public_pages.feed_page ?user ~scope:"all" ~sort_mode:"hot" ~is_logged_in
         ~admin_usernames:[] ~rail_communities:rail ~user_votes:[]
         ~current_page:1 [] req)
 
@@ -293,7 +293,7 @@ let polish_community : Earde.Community_types.community =
 let render_settings ?(target = "/c/polish/settings") ~is_admin ~is_top_mod ()
     =
   render_with_request ~target (fun req ->
-      Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+      Earde.Community_settings_pages.community_settings_page ~is_admin ~is_top_mod
         ~open_reports_count:0 ~community:polish_community ~mods:[]
         ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req)
 
@@ -348,7 +348,7 @@ let manage_mods_case =
     (fun () ->
       let html =
         render_with_request ~target:"/c/polish/manage-mods" (fun req ->
-            Earde.Pages.manage_mods_page ~is_admin:false
+            Earde.Moderation_pages.manage_mods_page ~is_admin:false
               ~current_user_role:(Some "top_mod") ~channels:[] ~sections:[]
               ~community:polish_community ~mods:[] req)
       in
@@ -366,7 +366,7 @@ let reports_case =
     (fun () ->
       let html =
         render_with_request ~target:"/c/polish/reports" (fun req ->
-            Earde.Pages.reports_queue_page ~is_admin:false ~is_top_mod:true
+            Earde.Moderation_pages.reports_queue_page ~is_admin:false ~is_top_mod:true
               ~channels:[] ~sections:[] ~community:polish_community
               ~status:Earde.Report_store.Report_open ~reports:[] ~previews:[] req)
       in

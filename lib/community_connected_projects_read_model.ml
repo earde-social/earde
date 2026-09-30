@@ -8,7 +8,7 @@
    every state change.
 
    This module never decides visibility. The existing community route
-   resolves the community and completes Handlers.can_view_community first,
+   resolves the community and completes Community_read_gate.can_view_community first,
    and only then reads here — so the section cannot become a side channel for
    a private or draft community. What is still owned here is durable
    identity: the slug must resolve to exactly one coherent community row, and

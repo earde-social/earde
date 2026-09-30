@@ -1,4 +1,4 @@
-(* Cartographic Civic pass 17: the shared Pages.msg_page through the new
+(* Cartographic Civic pass 17: the shared Site_pages.msg_page through the new
    launch message wrapper. ~400 handler call sites across every status
    family render through this one document, several under byte-identity
    anti-enumeration pins, so the suite pins the wrapper contract (single
@@ -20,7 +20,7 @@ let render ?user ?auth ?(title = "Not Found")
       (Dream.memory_sessions
          (fun req ->
            rendered :=
-             Earde.Pages.msg_page ?user ?auth ~title ~message ~alert_type
+             Earde.Site_pages.msg_page ?user ?auth ~title ~message ~alert_type
                ~return_url req;
            Dream.html "")
          (Dream.request ~method_:`GET ~target:"/qa-msg" ""))

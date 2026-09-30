@@ -21,37 +21,37 @@ let preferences_link =
 let footer_documents () =
   let community = Launch_fixture.nav_test_community in
   [ ( "launch_entry_page (default chrome)"
-    , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
+    , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
         ~title:"T" ~content:"B" () )
   ; ( "launch_entry_page (viewer, member)"
-    , Earde.Components.launch_entry_page
-        ~topbar:(Earde.Components.Entry_viewer (Some "alice"))
+    , Earde.Page_shell.launch_entry_page
+        ~topbar:(Earde.Page_shell.Entry_viewer (Some "alice"))
         ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
   ; ( "launch_entry_page (viewer, anonymous)"
-    , Earde.Components.launch_entry_page
-        ~topbar:(Earde.Components.Entry_viewer None)
+    , Earde.Page_shell.launch_entry_page
+        ~topbar:(Earde.Page_shell.Entry_viewer None)
         ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
   ; ( "launch_auth_page (login)"
-    , Earde.Components.launch_auth_page ~page_class:"launch-login"
+    , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
         ~title:"T" ~content:"B" () )
   ; ( "launch_app_page (member)"
-    , Earde.Components.launch_app_page ~user:"alice"
+    , Earde.Page_shell.launch_app_page ~user:"alice"
         ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
   ; ( "launch_app_page (anonymous)"
-    , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+    , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
         ~content:"B" () )
   ; ( "launch_onboarding_page (member)"
-    , Earde.Components.launch_onboarding_page ~user:"alice"
+    , Earde.Page_shell.launch_onboarding_page ~user:"alice"
         ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
   ; ( "launch_community_page (member)"
-    , Earde.Components.launch_community_page ~user:"alice" ~community
+    , Earde.Community_shell.launch_community_page ~user:"alice" ~community
         ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
         ~content:"B" () )
   ; ( "launch_community_page (anonymous)"
-    , Earde.Components.launch_community_page ~community ~sidebar:"S"
+    , Earde.Community_shell.launch_community_page ~community ~sidebar:"S"
         ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
   ; ( "launch_community_surface_page (member)"
-    , Earde.Components.launch_community_surface_page ~user:"alice"
+    , Earde.Community_shell.launch_community_surface_page ~user:"alice"
         ~community ~sidebar:"S" ~page_class:"launch-community-channel"
         ~title:"T" ~main_el:"<main class='cs-main'>B</main>" () )
   ]
@@ -91,7 +91,7 @@ let outside_main_case =
 
 let inert_case =
   fc_case "footer is links-only: no nested interactive controls" (fun () ->
-      let footer = Earde.Components.launch_footer in
+      let footer = Earde.Page_shell.launch_footer in
       Alcotest.(check bool) "no form" false (Html_assert.contains footer "<form");
       Alcotest.(check bool) "no button" false (Html_assert.contains footer "<button");
       Alcotest.(check bool) "no input" false (Html_assert.contains footer "<input");
@@ -105,7 +105,7 @@ let inert_case =
 let message_sheet_case =
   fc_case "the chrome-free message sheet renders no footer" (fun () ->
       let html =
-        Earde.Components.launch_message_page ~title:"T" ~content:"B" ()
+        Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" ()
       in
       Alcotest.(check int) "no footer" 0 (Html_assert.count_sub html footer_open);
       Alcotest.(check int) "no preferences link" 0

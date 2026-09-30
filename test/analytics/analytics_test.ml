@@ -222,7 +222,7 @@ let run_consent ?(headers = consent_good_headers) body =
         Dream.request ~method_:`POST ~target:"/analytics/consent" ~headers body
       in
       let response =
-        Lwt_main.run (Earde.Handlers.analytics_consent_handler request)
+        Lwt_main.run (Earde.Analytics_handlers.analytics_consent_handler request)
       in
       ( Dream.status_to_int (Dream.status response),
         Dream.header response "Set-Cookie",
@@ -259,7 +259,7 @@ let consent_sync_db_case =
             let* () =
               Dream.set_session_field req "user_id" (string_of_int author)
             in
-            Earde.Handlers.analytics_consent_handler req
+            Earde.Analytics_handlers.analytics_consent_handler req
           in
           let request =
             Dream.request ~method_:`POST ~target:"/analytics/consent"
@@ -1240,7 +1240,7 @@ let suites =
                 in
                 let response =
                   Lwt_main.run
-                    (Earde.Handlers.analytics_consent_handler request)
+                    (Earde.Analytics_handlers.analytics_consent_handler request)
                 in
                 Alcotest.(check int) "status" 204
                   (Dream.status_to_int (Dream.status response));
@@ -1284,7 +1284,7 @@ let suites =
       ; Analytics_fixture.an_case "unsupported method -> controlled 405 JSON" (fun () ->
             let response =
               Lwt_main.run
-                (Earde.Handlers.analytics_consent_method_not_allowed
+                (Earde.Analytics_handlers.analytics_consent_method_not_allowed
                    (Dream.request ~method_:`GET ~target:"/analytics/consent"
                       ""))
             in
@@ -1309,7 +1309,7 @@ let suites =
                       Lwt.bind
                         (Dream.set_session_field req "user_id" "12345")
                         (fun () ->
-                          Earde.Handlers.analytics_consent_handler req))
+                          Earde.Analytics_handlers.analytics_consent_handler req))
                 in
                 let response =
                   Lwt_main.run
@@ -1530,7 +1530,7 @@ let suites =
                 (Dream.memory_sessions
                    (fun req ->
                      rendered :=
-                       Earde.Pages.search_results_page ~admin_usernames:[]
+                       Earde.Public_pages.search_results_page ~admin_usernames:[]
                          [] 1 "all" "secret" [] [] [] [] req;
                      Dream.html !rendered)
                    (Dream.request ~method_:`GET

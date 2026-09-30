@@ -1,7 +1,6 @@
 (* HTTP layer for the dedicated-community-home creation flow of one verified
    permanent project (GET /projects/:slug/community-home/new and POST
-   /projects/:slug/community-home), kept out of the legacy Handlers
-   macro-module per the feature-module guideline. Both handlers are factories
+   /projects/:slug/community-home). Both handlers are factories
    over the closed onboarding mode (and, for the POST, a config loader) so
    tests can inject fixed values without touching the process environment, and
    a disabled or rejected request never triggers a route read, a configuration
@@ -70,13 +69,13 @@ let login_redirect () = clean_redirect "/login"
 
 let forbidden_page request =
   Dream.respond ~status:`Forbidden ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Allowed"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Allowed"
        ~message:"This request is not allowed." ~alert_type:"error"
        ~return_url:"/" request)
 
 let bad_request_page request =
   Dream.respond ~status:`Bad_Request ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Form Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Form Error"
        ~message:"There was a problem with your submission. Please try again."
        ~alert_type:"error" ~return_url:"/" request)
 
@@ -86,7 +85,7 @@ let bad_request_page request =
    it. *)
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Found"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
        ~message:"This page does not exist." ~alert_type:"error"
        ~return_url:"/" request)
 
@@ -95,7 +94,7 @@ let not_found_page request =
    the page. *)
 let server_error_page request =
   Dream.respond ~status:`Internal_Server_Error ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Error"
        ~message:"Something went wrong on our side. Please try again."
        ~alert_type:"error" ~return_url:"/" request)
 
@@ -103,7 +102,7 @@ let server_error_page request =
    generically and never disguised as a user form error. *)
 let unavailable_page request =
   Dream.respond ~status:`Service_Unavailable ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request)
+    (Site_pages.msg_page ?user:(session_user request)
        ~title:"Temporarily Unavailable"
        ~message:
          "Creating a community home is temporarily unavailable. Please try \

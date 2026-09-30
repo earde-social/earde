@@ -179,7 +179,7 @@ let bring_page ?user ?request ~access ~feedback () =
      arrive cold, from the landing CTA, or back from login/signup: the state
      lives in the session and the query string, never in the viewport, so
      authenticating changes nothing about which document the width shows. *)
-  Components.launch_entry_page ?request ~noindex:true
-    ~topbar:(Components.Entry_viewer user) ~desktop_only:true
+  Page_shell.launch_entry_page ?request ~noindex:true
+    ~topbar:(Page_shell.Entry_viewer user) ~desktop_only:true
     ~page_class:"launch-bring" ~title:"Bring your open-source community"
     ~content ()

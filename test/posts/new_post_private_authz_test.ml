@@ -1,5 +1,5 @@
 (* ===== /new-post private-community authorization (pass 15B) =====
-   Pins the two disclosure fixes in Handlers.new_post_page:
+   Pins the two disclosure fixes in Post_handlers.new_post_page:
    1. GET /new-post?community=:slug runs can_view_community before rendering
       the creation form or join gate — a private-community outsider gets the
       canonical community_not_found 404, byte-identical to a missing slug,
@@ -148,7 +148,7 @@ let make_fixtures (module C : Caqti_lwt.CONNECTION) =
     { outsider; member; pmember; smember; moderator; admin;
       pub; struct_; priv; sec_a; sec_b; priv_sec }
 
-let router = Dream.router [ Dream.get "/new-post" Earde.Handlers.new_post_page ]
+let router = Dream.router [ Dream.get "/new-post" Earde.Post_handlers.new_post_page ]
 
 (* One sql_pool for the whole suite. Nothing ever closes a Dream.sql_pool,
    and its pool lives inside the middleware closure, so reusing that one

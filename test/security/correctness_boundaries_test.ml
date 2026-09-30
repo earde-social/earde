@@ -62,7 +62,7 @@ let render_search ~q ~tab ~page =
   let pipeline =
     Dream.memory_sessions @@ fun req ->
     Dream.html
-      (Earde.Pages.search_results_page ~admin_usernames:[] [] page tab q [] [] []
+      (Earde.Public_pages.search_results_page ~admin_usernames:[] [] page tab q [] [] []
          [] req)
   in
   let* response =
@@ -314,7 +314,7 @@ let unban_location_case =
                 [ ("community_id", string_of_int cid)
                 ; ("community_slug", slug)
                 ; ("target_user_id", string_of_int uid) ]
-              Earde.Handlers.unban_community_user_handler
+              Earde.Moderation_handlers.unban_community_user_handler
           in
           Alcotest.(check int) "303" 303 (status_int response);
           Alcotest.(check (option string)) "authoritative Location"
@@ -345,7 +345,7 @@ let update_community_location_case =
                 ; ("banner_url", "")
                 ; ("existing_avatar_url", "")
                 ; ("existing_banner_url", "") ]
-              Earde.Handlers.update_community_handler
+              Earde.Community_settings_handlers.update_community_handler
           in
           Alcotest.(check int) "303" 303 (status_int response);
           Alcotest.(check (option string)) "authoritative Location"
@@ -372,7 +372,7 @@ let update_missing_community_case =
             ; ("banner_url", "")
             ; ("existing_avatar_url", "")
             ; ("existing_banner_url", "") ]
-          Earde.Handlers.update_community_handler
+          Earde.Community_settings_handlers.update_community_handler
       in
       Alcotest.(check int) "303" 303 (status_int response);
       Alcotest.(check (option string)) "root Location" (Some "/")
@@ -386,7 +386,7 @@ let export_disposition_case =
       let* uid = insert_admin (module C) "osshard_admin" in
       let* response =
         run_get ~url ~session:(admin_session uid) ~target:"/export-data"
-          Earde.Handlers.export_data_handler
+          Earde.Account_handlers.export_data_handler
       in
       Alcotest.(check int) "200" 200 (status_int response);
       Alcotest.(check (option string)) "conservative ASCII filename"
@@ -459,7 +459,7 @@ let verify_email_disclosure_case =
       let* response =
         run_get ~url:(poison url) ~session:[]
           ~target:"/verify-email?token=osshard-token"
-          Earde.Handlers.verify_email_handler
+          Earde.Auth_handlers.verify_email_handler
       in
       let* body = Dream.body response in
       must body generic;
@@ -478,7 +478,7 @@ let add_section_disclosure_case =
               ("default_sort", "hot"); ("position", "1") ]
           (Dream.router
              [ Dream.post "/c/:slug/add-section"
-                 Earde.Handlers.add_section_handler ])
+                 Earde.Community_structure_handlers.add_section_handler ])
       in
       Alcotest.(check int) "500" 500 (status_int response);
       let* body = Dream.body response in
@@ -503,7 +503,7 @@ let update_community_disclosure_case =
             ; ("banner_url", "")
             ; ("existing_avatar_url", "")
             ; ("existing_banner_url", "") ]
-          Earde.Handlers.update_community_handler
+          Earde.Community_settings_handlers.update_community_handler
       in
       Alcotest.(check int) "500" 500 (status_int response);
       let* body = Dream.body response in
@@ -519,7 +519,7 @@ let global_ban_disclosure_case =
           ~target:"/admin/ban/user/1" ~form:[]
           (Dream.router
              [ Dream.post "/admin/ban/user/:id"
-                 Earde.Handlers.ban_user_handler ])
+                 Earde.Admin_handlers.ban_user_handler ])
       in
       (* The current-admin lookup is the first query this route makes, so a
          pool where nothing resolves fails there — one query earlier than the
@@ -542,7 +542,7 @@ let global_unban_disclosure_case =
           ~target:"/admin/unban/user/1" ~form:[]
           (Dream.router
              [ Dream.post "/admin/unban/user/:id"
-                 Earde.Handlers.unban_user_global_handler ])
+                 Earde.Admin_handlers.unban_user_global_handler ])
       in
       (* Authorization-lookup failure, as above; the unban write's own
          failure is covered by global_unban_mutation_failure_case. *)
@@ -635,7 +635,7 @@ let global_ban_mutation_failure_case =
           ~form:[]
           (Dream.router
              [ Dream.post "/admin/ban/user/:id"
-                 Earde.Handlers.ban_user_handler ])
+                 Earde.Admin_handlers.ban_user_handler ])
       in
       (* Neither the refusal of a failed authority check nor a redirect: the
          durable admin lookup succeeded, the ban was attempted, and its own
@@ -674,7 +674,7 @@ let global_unban_mutation_failure_case =
           ~form:[]
           (Dream.router
              [ Dream.post "/admin/unban/user/:id"
-                 Earde.Handlers.unban_user_global_handler ])
+                 Earde.Admin_handlers.unban_user_global_handler ])
       in
       Alcotest.(check int) "200" 200 (status_int response);
       Alcotest.(check (option string)) "no Location" None
@@ -698,7 +698,7 @@ let unban_lookup_failure_case =
           ~form:
             [ ("community_id", "1"); ("community_slug", "//example.com");
               ("target_user_id", "1") ]
-          Earde.Handlers.unban_community_user_handler
+          Earde.Moderation_handlers.unban_community_user_handler
       in
       Alcotest.(check int) "500" 500 (status_int response);
       Alcotest.(check (option string)) "no Location" None
@@ -727,7 +727,7 @@ let unban_mutation_failure_case =
             [ ("community_id", string_of_int cid)
             ; ("community_slug", "//example.com")
             ; ("target_user_id", string_of_int uid) ]
-          Earde.Handlers.unban_community_user_handler
+          Earde.Moderation_handlers.unban_community_user_handler
       in
       Alcotest.(check int) "500" 500 (status_int response);
       Alcotest.(check (option string)) "no Location" None
@@ -787,7 +787,7 @@ let promote_typed_contract_case =
 let promote_router =
   Dream.router
     [ Dream.post "/c/:slug/manage-mods/promote"
-        Earde.Handlers.manage_mods_promote_handler ]
+        Earde.Moderation_handlers.manage_mods_promote_handler ]
 
 let promote_storage_disclosure_case =
   db_case "promote: a storage failure renders only the generic message"
