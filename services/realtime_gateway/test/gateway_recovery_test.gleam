@@ -33,7 +33,7 @@ fn wait_down(pid: Pid, timeout_ms: Int) -> Bool
 fn http_status(port: Int, path: String) -> Result(Int, Nil)
 
 @external(erlang, "gateway_test_ffi", "ws_connect")
-fn ws_connect(port: Int, target: String) -> Result(Socket, Nil)
+fn ws_connect(port: Int, target: String, origin: String) -> Result(Socket, Nil)
 
 @external(erlang, "gateway_test_ffi", "ws_send")
 fn ws_send(socket: Socket, text: String) -> Nil
@@ -59,9 +59,14 @@ const internal_secret = "recovery-test-internal-secret"
 
 const topic = "chan:7:0"
 
+// The page origin the test client presents, allowed explicitly so the tests
+// behave the same whatever REALTIME_ALLOWED_ORIGINS the shell exports.
+const page_origin = "http://localhost:8080"
+
 fn setup_env() -> Nil {
   putenv("REALTIME_TOKEN_SECRET", token_secret)
   putenv("REALTIME_INTERNAL_SECRET", internal_secret)
+  putenv("REALTIME_ALLOWED_ORIGINS", page_origin)
 }
 
 /// Starts a gateway owned by a fresh, unlinked root process, as `main` owns
@@ -110,6 +115,7 @@ fn join(port: Int, user_id: Int, username: String) -> Socket {
     ws_connect(
       port,
       "/socket/websocket?vsn=2.0.0&token=" <> token(user_id, username),
+      page_origin,
     )
   ws_send(socket, "[\"1\",\"1\",\"" <> topic <> "\",\"phx_join\",{}]")
   let assert Ok(_) = next_event(socket, "phx_reply", 2000)
