@@ -41,15 +41,15 @@ let check_q =
    no second query and no schema change: the upsert always counts, and only
    the comparison differs. The 60s window stays shared and hardcoded in the
    SQL above. *)
-let check_with ~max_attempts (module C : Caqti_lwt.CONNECTION) ip endpoint =
-  let now = Unix.gettimeofday () in
+let check_with ?(now = Unix.gettimeofday ()) ~max_attempts
+    (module C : Caqti_lwt.CONNECTION) ip endpoint =
   C.find check_q (ip, endpoint, now) >>= function
   | Ok attempts ->
       if attempts > max_attempts then Lwt.return (Ok `Blocked)
       else Lwt.return (Ok `Allowed)
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 
-let check db ip endpoint = check_with ~max_attempts db ip endpoint
+let check ?now db ip endpoint = check_with ?now ~max_attempts db ip endpoint
 
 (* Image uploads get their own bucket rather than sharing the
    authentication allowance: an upload is far more expensive than a login
