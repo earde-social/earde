@@ -237,7 +237,8 @@ let trigger_matrix_case =
       let* () =
         sql c "anonymize"
           "UPDATE users SET username = '[deleted_' || id || ']', email = \
-           'deleted_' || id || '@rtg.invalid' WHERE id = $1"
+           'deleted_' || id || '@rtg.invalid', password_hash = '' WHERE id = \
+           $1"
           member
       in
       let* () =
