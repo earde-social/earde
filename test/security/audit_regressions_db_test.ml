@@ -283,7 +283,7 @@ let pipeline_for ~url =
                  Earde.Community_settings_handlers.update_community_handler;
                (* Session-revocation slice: the routed production handlers
                   for authenticated password change, global ban and
-                  realtime-token refresh, mounted at their bin/main.ml
+                  realtime-token refresh, mounted at their lib/app_routes.ml
                   paths. *)
                Dream.post "/settings/password"
                  Earde.Account_handlers.change_password_handler;
@@ -292,12 +292,12 @@ let pipeline_for ~url =
                Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
                  Earde.Chat_handlers.realtime_token_handler;
                (* Vote ban-enforcement slice: the two production vote
-                  mutation boundaries, at their bin/main.ml paths. *)
+                  mutation boundaries, at their lib/app_routes.ml paths. *)
                Dream.post "/vote" Earde.Vote_handlers.vote_handler;
                Dream.post "/vote-comment"
                  Earde.Vote_handlers.vote_comment_handler
                (* No /add-mod and no /remove-mod: their absence from this
-                  router mirrors bin/main.ml, and the legacy-route case
+                  router mirrors lib/app_routes.ml, and the legacy-route case
                   asserts the real app answers 404 for them. *);
              ]
       in
@@ -1260,7 +1260,7 @@ let legacy_mod_routes_case =
       let* r = C.exec q_moderator (ordinary, community) in
       let* () = or_fail "ordinary mod" r in
 
-      (* The real route table, exactly as bin/main.ml builds it. *)
+      (* The real route table, mounted as lib/app_routes.ml mounts them. *)
       let app =
         Dream.sql_pool ~size:1 url
         @@ Dream.set_secret sec_secret

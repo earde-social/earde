@@ -3,7 +3,7 @@
 Manual, human-executable launch verification for the two GitHub community-home
 journeys. It requires no source reading: every route, form field, query
 parameter and event name below was taken from the shipped router
-(`bin/main.ml`), the shipped page modules, and `Analytics.event_name`.
+(`lib/app_routes.ml`), the shipped page modules, and `Analytics.event_name`.
 
 **Scope.** Two MVP journeys:
 

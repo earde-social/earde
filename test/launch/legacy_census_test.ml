@@ -13,12 +13,15 @@
      still registered and still render on launch chrome.
 
    Source-census only — no database, no server, no shell commands. The scanned
-   set is every lib/*.ml{,i} plus bin/main.ml, declared as dune deps. Comments
+   set is every lib/*.ml{,i} plus bin/main.ml, declared as dune deps; the route
+   table is lib/app_routes.ml. Comments
    count: a stale note naming a deleted file is as much a lie as a live link,
    so the OCaml sources are scanned verbatim. *)
 
 let lc_case name f = Alcotest.test_case name `Quick f
-let main_ml = List.assoc "bin/main.ml" Source_census.production_sources
+
+(* The route table lives in lib/app_routes.ml; bin/main.ml only mounts it. *)
+let main_ml = List.assoc "lib/app_routes.ml" Source_census.production_sources
 let count_in haystack needle = Html_assert.count_sub haystack needle
 
 (* Registrations are compared as token sequences: the formatter decides where
@@ -38,7 +41,7 @@ let hq_route_case =
       List.iter
         (fun needle ->
           Alcotest.(check bool)
-            (Printf.sprintf "main.ml free of %S" needle)
+            (Printf.sprintf "route table free of %S" needle)
             false
             (Html_assert.contains main_ml needle))
         [ "\"/earde-hq-dashboard\""; "hq_dashboard" ];
@@ -322,7 +325,7 @@ let surviving_routes_case =
       List.iter
         (fun needle ->
           Alcotest.(check bool)
-            (Printf.sprintf "main.ml registers %s" needle)
+            (Printf.sprintf "route table registers %s" needle)
             true
             (Html_assert.contains main_ml_tokens needle))
         (* 7. the root and legacy /all redirects, 8. the feed, 9. canonical
@@ -331,16 +334,14 @@ let surviving_routes_case =
         [
           "Dream.get \"/\" (fun request -> Dream.redirect request \"/feed\")";
           "Dream.get \"/all\" (fun request -> Dream.redirect request \"/feed\")";
-          "Dream.get \"/feed\" Earde.Public_handlers.feed_handler";
-          "Dream.get \"/p/:id\" Earde.Post_handlers.view_post_handler";
-          "Dream.get \"/admin\" Earde.Admin_handlers.admin_dashboard_handler";
-          "Dream.post \"/admin/ban/user/:id\" \
-           Earde.Admin_handlers.ban_user_handler";
+          "Dream.get \"/feed\" Public_handlers.feed_handler";
+          "Dream.get \"/p/:id\" Post_handlers.view_post_handler";
+          "Dream.get \"/admin\" Admin_handlers.admin_dashboard_handler";
+          "Dream.post \"/admin/ban/user/:id\" Admin_handlers.ban_user_handler";
           "Dream.post \"/admin/unban/user/:id\" \
-           Earde.Admin_handlers.unban_user_global_handler";
-          "Dream.get \"/_debug/state\" Earde.Admin_handlers.debug_state_handler";
-          "Dream.get \"/new-community\" \
-           Earde.Community_handlers.new_community_page";
+           Admin_handlers.unban_user_global_handler";
+          "Dream.get \"/_debug/state\" Admin_handlers.debug_state_handler";
+          "Dream.get \"/new-community\" Community_handlers.new_community_page";
         ])
 
 (* --- 14. a removed route reaches the normal unknown-route response ----- *)

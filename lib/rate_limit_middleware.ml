@@ -46,6 +46,88 @@ let maybe_cleanup request =
 let check_in_database request ~ip ~endpoint =
   Dream.sql request (fun db -> Rate_limit_store.check db ip endpoint)
 
+type operation =
+  | Login
+  | Signup
+  | Forgot_password
+  | Github_installation_start
+  | Project_repository_selection
+  | Project_creation
+  | Project_home_request
+  | Project_home_provisioning
+  | Project_home_accept
+  | Project_home_reject
+  | Project_home_removal_by_project
+  | Project_home_removal_by_community
+  | Network_community_publication
+  | Community_connection_request
+  | Community_connection_accept
+  | Community_connection_reject
+  | Community_connection_removal
+  | Shared_thread_share_request
+  | Shared_thread_accept
+  | Shared_thread_reject
+  | Shared_thread_withdrawal
+  | Shared_thread_removal
+
+(* The bucket is the operation, never the request target. Keying on the
+   target let every spelling Dream's router maps to the same handler —
+   /%6cogin, ///login, a trailing query, a different :slug — open a fresh
+   bucket, so the limit never bound. These labels are fixed strings chosen
+   here; the "op:" prefix keeps them apart from the upload bucket. *)
+let bucket = function
+  | Login -> "op:login"
+  | Signup -> "op:signup"
+  | Forgot_password -> "op:forgot-password"
+  | Github_installation_start -> "op:github-installation-start"
+  | Project_repository_selection -> "op:project-repository-selection"
+  | Project_creation -> "op:project-creation"
+  | Project_home_request -> "op:project-home-request"
+  | Project_home_provisioning -> "op:project-home-provisioning"
+  | Project_home_accept -> "op:project-home-accept"
+  | Project_home_reject -> "op:project-home-reject"
+  | Project_home_removal_by_project -> "op:project-home-removal-by-project"
+  | Project_home_removal_by_community -> "op:project-home-removal-by-community"
+  | Network_community_publication -> "op:network-community-publication"
+  | Community_connection_request -> "op:community-connection-request"
+  | Community_connection_accept -> "op:community-connection-accept"
+  | Community_connection_reject -> "op:community-connection-reject"
+  | Community_connection_removal -> "op:community-connection-removal"
+  | Shared_thread_share_request -> "op:shared-thread-share-request"
+  | Shared_thread_accept -> "op:shared-thread-accept"
+  | Shared_thread_reject -> "op:shared-thread-reject"
+  | Shared_thread_withdrawal -> "op:shared-thread-withdrawal"
+  | Shared_thread_removal -> "op:shared-thread-removal"
+
+let is_unreserved c =
+  match c with
+  | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '.' | '_' | '~' -> true
+  | _ -> false
+
+let encode_segment segment =
+  let buf = Buffer.create (String.length segment) in
+  String.iter
+    (fun c ->
+      if is_unreserved c then Buffer.add_char buf c
+      else Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
+    segment;
+  Buffer.contents buf
+
+(* The link back from the blocked and unavailable pages. It is rebuilt from
+   the routed path rather than echoed: the query is dropped (it can carry
+   reset tokens or OAuth codes), empty segments are dropped as Dream's
+   router drops them, and every decoded segment is re-encoded with nothing
+   but unreserved characters left bare, so the result is always one rooted
+   path that cannot turn into a protocol-relative or off-site URL. *)
+let return_path target =
+  let segments =
+    String.split_on_char '/' (Request_target_redaction.path_only target)
+    |> List.filter (fun s -> s <> "")
+    |> List.map (fun s -> encode_segment (Dream.from_percent_encoded s))
+    |> List.filter (fun s -> s <> "")
+  in
+  "/" ^ String.concat "/" segments
+
 (* Fail closed: only a positive [`Allowed] reaches the wrapped handler.
    The limiter guards credential guessing and mail-sending routes, so a
    lookup that errors, a promise that rejects, or a pool that cannot hand
@@ -54,12 +136,10 @@ let check_in_database request ~ip ~endpoint =
    if it were allowed. The wrapped handler runs OUTSIDE the catch: an
    exception it raises is its own and propagates as before, never
    relabelled as a limiter outage. *)
-let make_middleware ~check ~cleanup inner_handler request =
+let make_middleware ~check ~cleanup operation inner_handler request =
   let ip = Dream.client request in
-  (* Path only: the rate-limit table must never persist query values (reset
-     tokens, OAuth state/code, search terms), and /login?x=y must share
-     /login's bucket rather than minting a fresh one per query string. *)
-  let endpoint = Request_target_redaction.path_only (Dream.target request) in
+  let endpoint = bucket operation in
+  let return_url = return_path (Dream.target request) in
   (* Cleanup is best effort and must not be able to change the decision
      below, even by raising synchronously. *)
   (try cleanup request
@@ -79,19 +159,16 @@ let make_middleware ~check ~cleanup inner_handler request =
   | `Decided `Allowed -> inner_handler request
   | `Decided `Blocked ->
       let user = Dream.session_field request "username" in
-      (* The blocked page's return link reuses the path-only endpoint: echoing
-         the full target would leak query secrets (OAuth code/state, reset
-         tokens) into the rendered HTML. *)
       Dream.html
         (Site_pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
            ~message:"Too many attempts. Please try again later."
-           ~alert_type:"error" ~return_url:endpoint request)
+           ~alert_type:"error" ~return_url request)
   | `Unavailable ->
       (* Neither the IP nor the storage error is logged: the error text can
          carry connection and query detail, and the bucket key is an IP. *)
       Dream.log "rate-limit enforcement unavailable; request refused";
-      temporarily_unavailable ~return_url:endpoint request
+      temporarily_unavailable ~return_url request
 
-let middleware inner_handler request =
-  make_middleware ~check:check_in_database ~cleanup:maybe_cleanup inner_handler
-    request
+let middleware operation inner_handler request =
+  make_middleware ~check:check_in_database ~cleanup:maybe_cleanup operation
+    inner_handler request

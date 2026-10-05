@@ -1,7 +1,7 @@
 (* === CORE FEED ===
 
    /feed is the only global feed surface; / and /all are redirects to it (see
-   bin/main.ml). The pre-/feed home handler and its warm-chrome renderer were
+   lib/app_routes.ml). The pre-/feed home handler and its warm-chrome renderer were
    removed with the rest of the legacy chrome. *)
 
 (* /feed — the global Feed surface (shell-language, outside any one community). Reuses the same
@@ -9,7 +9,7 @@
    every public persistent post. No new query, no migration, no realtime. Default scope is
    following for logged-in users; guests are forced to "all" (no personalized feed without a
    session) and never see the toggle. *)
-let feed_handler request =
+let feed ~page request =
   let user = Dream.session_field request "username" in
   let user_id =
     match Dream.session_field request "user_id" with
@@ -17,12 +17,6 @@ let feed_handler request =
     | None -> 0
   in
   let is_logged_in = user_id > 0 in
-
-  let page =
-    match Dream.query request "page" with
-    | Some p_str -> ( try int_of_string p_str with _ -> 1)
-    | None -> 1
-  in
   let sort_mode =
     match Dream.query request "sort" with
     | Some "new" -> Post_types.Newest
@@ -44,8 +38,8 @@ let feed_handler request =
     | _, false -> "all"
     | _ -> "following"
   in
-  let limit = 20 in
-  let offset = (max 1 page - 1) * limit in
+  let limit = Public_pagination.page_size in
+  let offset = Public_pagination.offset page in
 
   Dream.sql request (fun db ->
       let%lwt posts =
@@ -104,7 +98,17 @@ let feed_handler request =
                ~message:(Handler_support.db_error_message e)
                ~alert_type:"error" ~return_url:"/" request))
 
-let search_handler request =
+(* The page number is checked before any database work: past
+   Public_pagination.max_page the request ends here with a 400. *)
+let feed_handler request =
+  match Public_pagination.parse (Dream.query request "page") with
+  | Ok page -> feed ~page request
+  | Error `Out_of_range ->
+      Public_pagination.out_of_range
+        ?user:(Dream.session_field request "username")
+        ~return_url:"/feed" request
+
+let search ~page request =
   let user = Dream.session_field request "username" in
   let user_id =
     match Dream.session_field request "user_id" with
@@ -141,26 +145,36 @@ let search_handler request =
         (Public_pages.search_results_page ?user ~admin_usernames:[] [] 1
            active_tab "" [] [] [] [] request)
   else begin
-    let page =
-      match Dream.query request "page" with
-      | Some p_str -> ( try int_of_string p_str with _ -> 1)
-      | None -> 1
+    let limit = Public_pagination.page_size in
+    let offset = Public_pagination.offset page in
+    (* The page renders only the active tab, so only that tab's query runs;
+       the other three answer empty without touching the database. Unknown
+       tab values render as the threads tab and query as it. *)
+    let tab =
+      match active_tab with
+      | "communities" -> `Communities
+      | "people" -> `People
+      | "comments" -> `Comments
+      | _ -> `Posts
     in
-    let limit = 20 in
-    let offset = (max 1 page - 1) * limit in
+    let only wanted run = if tab = wanted then run () else Lwt.return_ok [] in
 
     Dream.sql request (fun db ->
         let%lwt communities_res =
-          Community_store.search_communities db search_term limit offset
+          only `Communities (fun () ->
+              Community_store.search_communities db search_term limit offset)
         in
         let%lwt users_res =
-          User_store.search_users db search_term limit offset
+          only `People (fun () ->
+              User_store.search_users db search_term limit offset)
         in
         let%lwt posts_res =
-          Post_store.search_posts db search_term limit offset
+          only `Posts (fun () ->
+              Post_store.search_posts db search_term limit offset)
         in
         let%lwt comments_res =
-          Comment_store.search_comments db search_term limit offset
+          only `Comments (fun () ->
+              Comment_store.search_comments db search_term limit offset)
         in
         let%lwt user_votes =
           if user_id > 0 then User_store.get_user_post_votes db user_id
@@ -210,6 +224,20 @@ let search_handler request =
                  ~message:"Database error during search. Please try again."
                  ~alert_type:"error" ~return_url:"/" request))
   end
+
+(* The empty-query prompt never reads a page number; with a query, the page
+   is checked before any database work. *)
+let search_handler request =
+  let search_term =
+    match Dream.query request "q" with Some q -> String.trim q | None -> ""
+  in
+  match Public_pagination.parse (Dream.query request "page") with
+  | Error `Out_of_range when search_term <> "" ->
+      Public_pagination.out_of_range
+        ?user:(Dream.session_field request "username")
+        ~return_url:"/search" request
+  | Ok page -> search ~page request
+  | Error `Out_of_range -> search ~page:1 request
 
 (* GET /api/unread-notifs is gone with the client-side badge it existed to
    feed. It could only answer "0" when the count query failed, which the

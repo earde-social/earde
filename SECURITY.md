@@ -20,7 +20,8 @@ is ideal.
 
 ## Supported versions
 
-Only the current `main` branch is supported. There are no release branches.
+Fixes land on `main` and in the next release. Only the latest release and the
+current `main` branch are supported; there are no release branches.
 
 ## Scope
 
@@ -49,13 +50,31 @@ Reports that show they are more severe than described are welcome.
 
   See [docs/features/realtime-access.md](docs/features/realtime-access.md).
 - **Password-reset links.** Issuing a new link does not cancel earlier unexpired
-  links. Using any link, or changing the password, invalidates all of them.
-- **Upload limiter.** The per-user image-upload limiter allows the upload if its
-  own storage check fails. It only meters image processing for authenticated
-  members.
-- **Search** uses unindexed substring matching and has no rate limit.
-  Deployments with large archives should put request limits in front of
-  `/search`.
+  links. Using any link, changing the password, or deleting the account
+  invalidates all of them.
+- **Rate limits** count attempts per client address and per operation (five a
+  minute for login, signup, reset requests and the other limited forms). There
+  is no per-account limit, and the authenticated password change and the reset
+  form itself are not limited. The client address is only as trustworthy as the
+  proxy in front of Earde; see "Client addresses" in
+  [docs/deployment.md](docs/deployment.md).
+- **Upload limiter.** The image-upload limiter counts per client address and
+  allows the upload if its own storage check fails. It only meters image
+  processing for authenticated members.
+- **Public listing cost.** Community homes and sections, `/feed` and `/search`
+  page with LIMIT/OFFSET and compute each candidate post's score and comment
+  count before sorting. Indexed lookups keep this cheap per post, and pages
+  above 1,000 are refused before any database work, but the cost of a page still
+  grows with the number of posts in the community (or, for `/feed` and
+  `/search`, in the whole public archive). On a test community of 20,000 posts
+  and 60,000 comments every permitted page took under about a second; we have
+  not measured larger archives. These pages are public and not rate-limited.
+  Profile pages (`/u/:username`) list all of one author's posts and comments
+  without paging; their cost is bounded by that author's own content.
+- **Search** is substring matching over titles, post bodies and comments, with
+  no full-text index; each request runs one tab's query. Deployments with large
+  archives should rate-limit anonymous `GET` requests to `/search`, `/feed` and
+  `/c/` at the proxy.
 - **Moderation semantics.**
   - A community ban does not remove membership, so a banned member of a private
     community can still read it.

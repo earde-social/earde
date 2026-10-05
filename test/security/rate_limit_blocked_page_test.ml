@@ -1,9 +1,10 @@
 (* === RATE-LIMIT BLOCKED PAGE ===
    Database-gated (EARDE_TEST_DATABASE_URL): drives the real
    Rate_limit_middleware.middleware past its limit over Postgres and asserts the
-   blocked page's return link is the path only — no query value from the
-   original target may reach the rendered HTML. Fixture "secrets" are obviously
-   fake, and assertions on them are boolean so a failure never prints them. *)
+   blocked page's return link is the routed path only — no query value from
+   the original target may reach the rendered HTML. Fixture "secrets" are
+   obviously fake, and assertions on them are boolean so a failure never prints
+   them. The return-link builder itself is covered DB-free below. *)
 
 let ( let* ) = Lwt.bind
 
@@ -13,13 +14,15 @@ let or_fail label = function
   | Ok v -> Lwt.return v
   | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
 
+let client = "rlbp-client"
+
 let q_cleanup =
   (Caqti_type.string ->. Caqti_type.unit)
-    "DELETE FROM rate_limits WHERE endpoint = $1"
+    "DELETE FROM rate_limits WHERE ip_address = $1"
 
-(* One case = one endpoint bucket, cleared before and after so repeated runs
-   start from a fresh window. *)
-let db_case name ~endpoint f =
+(* Every case owns the buckets of its own client address, cleared before and
+   after so repeated runs start from a fresh window. *)
+let db_case name f =
   Alcotest.test_case name `Quick (fun () ->
       match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
       | None | Some "" -> Alcotest.skip ()
@@ -29,7 +32,7 @@ let db_case name ~endpoint f =
              let* conn = or_fail "connect" conn in
              let (module C : Caqti_lwt.CONNECTION) = conn in
              let cleanup () =
-               let* r = C.exec q_cleanup endpoint in
+               let* r = C.exec q_cleanup client in
                or_fail "cleanup" r
              in
              let* () = cleanup () in
@@ -40,10 +43,13 @@ let db_case name ~endpoint f =
 (* Repeats the same GET through the real middleware until the limiter
    blocks (bounded well past the production limit, which stays private to
    Rate_limit_store), returning the blocked response's status and body. *)
-let run_until_blocked ~url ~target =
+let run_until_blocked ~url ~operation ~target =
   let handler =
-    Dream.sql_pool url @@ Dream.memory_sessions
-    @@ Earde.Rate_limit_middleware.middleware (fun _ ->
+    (fun inner request ->
+      Dream.set_client request client;
+      inner request)
+    @@ Dream.sql_pool url @@ Dream.memory_sessions
+    @@ Earde.Rate_limit_middleware.middleware operation (fun _ ->
         Dream.respond "rlbp-allowed")
   in
   let rec go n =
@@ -57,10 +63,11 @@ let run_until_blocked ~url ~target =
   go 1
 
 let callback_case =
-  db_case "blocked callback page links to the path only"
-    ~endpoint:"/integrations/github/authorize/callback" (fun ~url ->
+  db_case "blocked page with a code/state query links to the path only"
+    (fun ~url ->
       let* status, body =
         run_until_blocked ~url
+          ~operation:Earde.Rate_limit_middleware.Github_installation_start
           ~target:
             "/integrations/github/authorize/callback?code=fake_rl_code_21&state=fake_rl_state_22"
       in
@@ -90,10 +97,10 @@ let callback_case =
       Lwt.return_unit)
 
 let login_case =
-  db_case "blocked /login?next=/settings page returns to /login"
-    ~endpoint:"/login" (fun ~url ->
+  db_case "blocked /login?next=/settings page returns to /login" (fun ~url ->
       let* status, body =
-        run_until_blocked ~url ~target:"/login?next=/settings"
+        run_until_blocked ~url ~operation:Earde.Rate_limit_middleware.Login
+          ~target:"/login?next=/settings"
       in
       Alcotest.(check int) "blocked status" 200 status;
       Alcotest.(check bool)
@@ -107,8 +114,41 @@ let login_case =
         (Html_assert.contains body "next=/settings");
       Lwt.return_unit)
 
+(* The return link is rebuilt from the routed segments, never echoed: every
+   spelling that routes to /login returns to /login, and nothing a client
+   puts in the path can make it protocol-relative or carry raw markup. *)
+let return_path_case =
+  Alcotest.test_case "return link is a canonical rooted path" `Quick (fun () ->
+      List.iter
+        (fun (target, expected) ->
+          Alcotest.(check string)
+            target expected
+            (Earde.Rate_limit_middleware.return_path target))
+        [
+          ("/login", "/login");
+          ("/login?next=/settings", "/login");
+          ("/%6cogin", "/login");
+          ("/lo%67in#x", "/login");
+          ("///login", "/login");
+          ("//////login", "/login");
+          ("/login/", "/login");
+          ("", "/");
+          ("/", "/");
+          ("//", "/");
+          ("//evil.example/x", "/evil.example/x");
+          ("/%2F%2Fevil.example", "/%2F%2Fevil.example");
+          ("/%5C%5Cevil.example", "/%5C%5Cevil.example");
+          ("/c/my-community/t/12/share", "/c/my-community/t/12/share");
+          ("/c/a%20b/t/1/share", "/c/a%20b/t/1/share");
+          ("/u/'><script>", "/u/%27%3E%3Cscript%3E");
+          ("/\t/evil", "/%09/evil");
+        ])
+
 let suite = [ callback_case; login_case ]
 
 let suites =
   (* Blocked-page return link over the real middleware + Postgres. *)
-  [ ("rate_limit_blocked_page", suite) ]
+  [
+    ("rate_limit_blocked_page", suite);
+    ("rate_limit_return_path", [ return_path_case ]);
+  ]

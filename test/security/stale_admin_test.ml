@@ -180,7 +180,7 @@ let make_user (module C : Caqti_lwt.CONNECTION) ~admin username =
 
 let secret = "stad-test-secret-value"
 
-(* Every route here is mounted at its bin/main.ml path. Real SQL sessions,
+(* Every route here is mounted at its lib/app_routes.ml path. Real SQL sessions,
    because a case's whole point is that the durable session row survives the
    demotion untouched. /probe exists only to read the session dictionary
    back; it authorizes nothing. *)

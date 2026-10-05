@@ -26,8 +26,8 @@ let enqueue_query =
     \   RETURNING id"
 
 (* §3.3 atomic local deletion: lock the user row, apply exactly the
-   anonymize_user rewrite, enqueue (or adopt) the durable deletion job, and
-   commit both together. The FOR UPDATE lock serializes concurrent deletions
+   anonymize_user rewrite, revoke every session and reset link, enqueue (or
+   adopt) the durable deletion job, and commit all of it together. The FOR UPDATE lock serializes concurrent deletions
    of the same account. No HTTP happens anywhere near this transaction. *)
 let anonymize_and_enqueue (module C : Caqti_lwt.CONNECTION) user_id =
   let distinct_id = Analytics.distinct_id_of_user_id user_id in
@@ -55,14 +55,22 @@ let anonymize_and_enqueue (module C : Caqti_lwt.CONNECTION) user_id =
               >>= function
               | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
               | Ok () -> (
-                  C.find enqueue_query distinct_id >>= function
-                  | Error e ->
-                      C.rollback () >>= fun _ ->
-                      Lwt.return (Error (Caqti_error.show e))
-                  | Ok job_id -> (
-                      C.commit () >>= function
-                      | Error e -> Lwt.return (Error (Caqti_error.show e))
-                      | Ok () -> Lwt.return (Ok (job_id, distinct_id)))))))
+                  (* A reset link issued before the deletion would otherwise
+                 set a password on the tombstone and log back into it. It
+                 dies here, under the user lock taken above: the same
+                 users -> password_resets order reset consumption uses. *)
+                  Credential_store.revoke_reset_links (module C) user_id
+                  >>= function
+                  | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+                  | Ok () -> (
+                      C.find enqueue_query distinct_id >>= function
+                      | Error e ->
+                          C.rollback () >>= fun _ ->
+                          Lwt.return (Error (Caqti_error.show e))
+                      | Ok job_id -> (
+                          C.commit () >>= function
+                          | Error e -> Lwt.return (Error (Caqti_error.show e))
+                          | Ok () -> Lwt.return (Ok (job_id, distinct_id))))))))
 
 (* Atomic claim of one specific pending job (the immediate post-deletion
    attempt): attempts and the lease timestamp advance in the same statement.

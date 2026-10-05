@@ -10,7 +10,8 @@ let get_user_for_login_query =
   (Caqti_type.string
   ->? Caqti_type.(t2 (t4 int string string string) (t3 string bool bool)))
     "SELECT id, username, email, created_at::text, password_hash, is_admin, \
-     is_banned FROM users WHERE username = $1 OR email = $1"
+     is_banned FROM users WHERE (username = $1 OR email = $1) AND username <> \
+     '[deleted_' || id::text || ']'"
 
 let get_user_for_login (module C : Caqti_lwt.CONNECTION) identifier =
   Query_timer.with_query_timer ~name:"get_user_for_login" (fun () ->
@@ -18,10 +19,33 @@ let get_user_for_login (module C : Caqti_lwt.CONNECTION) identifier =
       | Ok res -> Lwt.return (Ok res)
       | Error e -> Lwt.return (Error (Caqti_error.show e)))
 
+(* The login's second look at the account, after its session was written.
+   Argon2 runs between the lookup and the session write with no lock held,
+   so the account may have been deleted, banned or given a new password in
+   between; each of those revokes sessions, but only the sessions that
+   existed when it ran. FOR SHARE closes the gap: a deletion, ban or password
+   change that already holds the row makes this wait and then see the new
+   row, and one that locks the row later finds the session already
+   committed and revokes it. *)
+let login_still_current_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.(t2 int string) ->? Caqti_type.int)
+    "SELECT id FROM users\n\
+    \   WHERE id = $1 AND password_hash = $2 AND NOT is_banned\n\
+    \     AND username <> '[deleted_' || id::text || ']'\n\
+    \   FOR SHARE"
+
+let login_still_current (module C : Caqti_lwt.CONNECTION) ~id ~hash =
+  C.find_opt login_still_current_query (id, hash) >>= function
+  | Ok row -> Lwt.return (Ok (Option.is_some row))
+  | Error e -> Lwt.return (Error (Caqti_error.show e))
+
 (* GDPR Art. 17 (right to erasure): scrub PII from the row, preserve post/comment rows for
    thread coherence. Tombstone [deleted_N] prevents username recycling after deletion.
    bio/avatar_url are user-authored profile data and must not survive the account —
-   the settings page and /privacy both promise their removal. *)
+   the settings page and /privacy both promise their removal. The tombstone is
+   terminal: it keeps no password and no admin authority, which the
+   users_deleted_account_terminal CHECK enforces for every later write. *)
 let anonymize_user_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->. Caqti_type.unit)
@@ -30,7 +54,8 @@ let anonymize_user_query =
     \       email = 'deleted_' || id || '@earde.local',\n\
     \       password_hash = '',\n\
     \       bio = NULL,\n\
-    \       avatar_url = NULL\n\
+    \       avatar_url = NULL,\n\
+    \       is_admin = FALSE\n\
     \   WHERE id = $1"
 
 let anonymize_user (module C : Caqti_lwt.CONNECTION) user_id =

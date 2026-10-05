@@ -10,6 +10,16 @@ val get_user_for_login :
   result
   Lwt.t
 
+val login_still_current :
+  (module Caqti_lwt.CONNECTION) ->
+  id:int ->
+  hash:string ->
+  (bool, string) result Lwt.t
+(** Whether account [id] is still live, unbanned and has password [hash], read
+    under FOR SHARE so that a concurrent deletion, ban or password change either
+    finishes first and is seen, or comes after and revokes the session the
+    caller already wrote. *)
+
 val anonymize_user :
   (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 

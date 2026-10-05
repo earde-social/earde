@@ -8,7 +8,8 @@ design notes live in [docs/features/](features).
 
 | Path | Contents |
 |---|---|
-| `bin/main.ml` | Server entrypoint: configuration, middleware stack and routes |
+| `bin/main.ml` | Server entrypoint: configuration and the middleware stack |
+| `lib/app_routes.ml` | The route table, including which routes are rate-limited |
 | `bin/retry_posthog_deletions.ml`, `bin/check_posthog_config.ml` | Operator tools for the analytics integration |
 | `lib/` | The application (one dune library, `earde`); every module has an `.mli` |
 | `static/css/`, `static/js/`, `static/images/` | Stylesheets, page-scoped scripts, brand images |
@@ -20,7 +21,8 @@ design notes live in [docs/features/](features).
 
 ## Request flow
 
-`bin/main.ml` wraps the router in this middleware stack, outermost first:
+`bin/main.ml` wraps the router (`App_routes.router`) in this middleware stack,
+outermost first:
 
 1. **Client address.** The client IP is taken from `X-Forwarded-For` only when the
    immediate peer is a trusted proxy (`Client_address`, `EARDE_TRUSTED_PROXIES`).
@@ -35,7 +37,9 @@ design notes live in [docs/features/](features).
 
 CSRF protection uses Dream's form tokens (`Csrf_field`). The consent endpoint uses
 JSON with origin checks instead. Rate limits (`Rate_limit_middleware`,
-`Rate_limit_store`) wrap the authentication POSTs and fail closed.
+`Rate_limit_store`) wrap the authentication POSTs and the other sensitive forms,
+and fail closed. Each wrapped route names its operation, and the operation, not
+the request path, is the bucket, so different spellings of one path share it.
 
 ## Application modules
 
@@ -88,8 +92,8 @@ Main feature areas:
 
 - **Publish after commit.** A chat message is written to PostgreSQL first. After
   the commit, Dream publishes it to the gateway's internal endpoint, best effort
-  (`Realtime.publish_chat_message`, bounded by a short timeout). A failed publish
-  loses nothing.
+  (`Realtime.publish_chat_message`, bounded by a short timeout, over a socket it
+  always closes). A failed publish loses nothing.
 - **Signed topic tokens.** Browsers connect to the gateway with a signed,
   short-lived, per-topic token (`Realtime_token`). The topic includes a
   per-community access generation, which database triggers bump whenever read
