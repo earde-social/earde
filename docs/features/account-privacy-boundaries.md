@@ -165,12 +165,14 @@ requesting another reset link.
 ## Shared rate limiter
 
 `Rate_limit_middleware.middleware` fronts every sensitive POST in
-`bin/main.ml` (login, signup, reset request, and the project/community
+`lib/app_routes.ml` (login, signup, reset request, and the project/community
 management mutations). It now fails closed: only a positive Allowed decision
 reaches the wrapped handler. A lookup error, a rejected promise or a pool
 that cannot provide a connection returns a generic 503 and runs nothing
-behind it. Budgets, the 60 s window, path-only bucket keys and the trusted
-client-address rule are unchanged; the opportunistic expiry cleanup remains
+behind it. Budgets, the 60 s window and the trusted client-address rule are
+unchanged. Each route names its operation, and the bucket is that operation
+rather than the request path, so percent-encoded, repeated-slash and
+parameterized spellings of one route share a bucket; the opportunistic expiry cleanup remains
 best effort and cannot change a decision. An exception raised by an allowed
 handler is that handler's own and is not relabelled as a limiter outage.
 

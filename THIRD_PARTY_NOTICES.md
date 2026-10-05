@@ -96,7 +96,7 @@ SOFTWARE.
 ### Octicons: GitHub mark
 
 The inline GitHub mark in `lib/page_shell.ml` and `lib/github_onboarding_pages.ml`
-is Octicons' `mark-github` icon. Source: <https://github.com/primer/octicons>.
+is adapted from an earlier version of Octicons' `mark-github` icon. Source: <https://github.com/primer/octicons>.
 The icon's code is MIT-licensed. The GitHub logo itself is a trademark of GitHub,
 Inc.; Earde shows it only to identify the GitHub integration. Use of the logo is
 governed by GitHub's logo guidelines, not by the licence below.
@@ -137,13 +137,15 @@ These are fetched when you build. Each keeps its own licence.
 
 - **OCaml packages**, pinned in `earde.opam.locked`.
   - Most are MIT, ISC or BSD.
-  - Several are LGPL with the OCaml linking exception, for example Caqti and
-    Zarith.
+  - Several are LGPL with a linking exception: Caqti is LGPL-3.0-or-later with
+    the LGPL-3.0 linking exception, and Zarith is LGPL-2.0 with the OCaml
+    linking exception.
   - `lwt_ssl` is LGPL with an OpenSSL linking exception.
   - Menhir, a GPL-2.0 parser generator, runs only at build time.
 - **Gleam and Erlang packages** for the realtime gateway, locked in
   `services/realtime_gateway/manifest.toml`.
-  - The Gleam standard libraries, Mist and Glisten are Apache-2.0.
+  - The Gleam standard libraries, Mist, Glisten, `envoy`, `exception`,
+    `gramps`, `logging` and `gleeunit` (tests only) are Apache-2.0.
   - Beryl, `lattice_presence`, `palabres` and `hpack_erl` are MIT.
   - Beryl is fetched from GitHub at a pinned commit.
 - **System software**: PostgreSQL (PostgreSQL License), libargon2 (CC0-1.0 or
@@ -154,7 +156,8 @@ the LGPL terms of the linked OCaml libraries.
 
 ## Name and logos
 
-The Earde name and the logos in `static/images/` are not covered by the MIT
-License; all rights are reserved. If you run a modified copy, replace them and
-the `earde.com` references in the code, such as the mail sender and the
-production analytics origin, with your own.
+The Earde name and the two logo files in `static/images/` (`logo-mark.svg` and
+`logo-wordmark.svg`) are not covered by the MIT License, and this repository
+grants no licence to them. Their origin is not documented here. If you run a
+modified copy, replace them and the `earde.com` references in the code, such as
+the mail sender and the production analytics origin, with your own.
