@@ -151,5 +151,6 @@ let () =
            Html_boundary_test.suites;
            Account_privacy_test.suites;
            Realtime_generations_test.suites;
+           Realtime_publish_fd_test.suites;
            Github_verification_freshness_test.suites;
          ])
