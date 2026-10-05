@@ -99,6 +99,13 @@ let publish_many ~url n =
 
 let settle () = Lwt_unix.sleep 0.2
 
+(* A leak shows as one descriptor per publish. The full suite runs other
+   cases' background work in this process, so the count may move by a few
+   descriptors of theirs either way; it must never grow by anything like a
+   cycle's worth. *)
+let publishes_per_cycle = 60
+let tolerance = 5
+
 (* Lwt opens its job-notification descriptor on first use (the address
    lookup), so one throwaway publish comes before any baseline. *)
 let warm_up () = publish_many ~url:"http://127.0.0.1:9" 1
@@ -116,16 +123,19 @@ let cycles behaviour ~label =
              else
                let* () =
                  with_peer behaviour (fun ~url ~kill ->
-                     let* () = publish_many ~url 60 in
+                     let* () = publish_many ~url publishes_per_cycle in
                      (* The gateway goes away only after every publish has
                         given up on it, as in the hang-then-kill reproduction. *)
                      let* () = kill () in
                      settle ())
                in
                let* () = settle () in
-               Alcotest.(check int)
-                 (Printf.sprintf "%s: descriptors after cycle %d" label k)
-                 baseline (open_fds ());
+               let now = open_fds () in
+               if now > baseline + tolerance then
+                 Alcotest.failf
+                   "%s: %d descriptors after cycle %d, baseline %d (a leak \
+                    adds one per publish, %d per cycle)"
+                   label now k baseline publishes_per_cycle;
                cycle (k - 1)
            in
            cycle 5))
@@ -142,7 +152,9 @@ let refused_case =
            let* () = publish_many ~url:"http://127.0.0.1:9" 50 in
            let* () = publish_many ~url:"https://127.0.0.1:9" 5 in
            let* () = settle () in
-           Alcotest.(check int) "descriptors" baseline (open_fds ());
+           let now = open_fds () in
+           if now > baseline + tolerance then
+             Alcotest.failf "%d descriptors, baseline %d" now baseline;
            Lwt.return_unit))
 
 let suites =
