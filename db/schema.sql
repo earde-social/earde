@@ -2058,6 +2058,13 @@ CREATE INDEX idx_chat_messages_search_tsv ON public.chat_messages USING gin (sea
 
 
 --
+-- Name: idx_comments_post_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_comments_post_id ON public.comments USING btree (post_id);
+
+
+--
 -- Name: idx_community_connection_audit_events_actor; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2223,6 +2230,13 @@ CREATE INDEX idx_pending_signups_expires_at ON public.pending_signups USING btre
 --
 
 CREATE UNIQUE INDEX idx_pending_signups_username_active ON public.pending_signups USING btree (lower(username)) WHERE (consumed_at IS NULL);
+
+
+--
+-- Name: idx_post_votes_post_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_post_votes_post_id ON public.post_votes USING btree (post_id);
 
 
 --
@@ -3177,4 +3191,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260929120000'),
     ('20260929130000'),
     ('20260930120000'),
-    ('20261005120000');
+    ('20261005120000'),
+    ('20261005130000');

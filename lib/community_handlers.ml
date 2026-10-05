@@ -437,7 +437,7 @@ let with_settings_connected_projects db ?user request ~community_slug
            page. *)
         connected_projects_error_page ?user request
 
-let community_page_handler request =
+let community_page ~page request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
   let user_id =
@@ -446,13 +446,8 @@ let community_page_handler request =
     | None -> 0
   in
   let sort_str_opt = Dream.query request "sort" in
-  let page =
-    match Dream.query request "page" with
-    | Some p -> ( try int_of_string p with _ -> 1)
-    | None -> 1
-  in
-  let limit = 20 in
-  let offset = (max 1 page - 1) * limit in
+  let limit = Public_pagination.page_size in
+  let offset = Public_pagination.offset page in
 
   let shared_sidebar_data db (community : Community_types.community) =
     let%lwt mods_res =
@@ -704,6 +699,17 @@ let community_page_handler request =
                ~message:(Handler_support.db_error_message err)
                ~alert_type:"error" ~return_url:"/" request))
 
+(* The page number is checked before any database work: past
+   Public_pagination.max_page the request ends here with a 400. *)
+let community_page_handler request =
+  match Public_pagination.parse (Dream.query request "page") with
+  | Ok page -> community_page ~page request
+  | Error `Out_of_range ->
+      Public_pagination.out_of_range
+        ?user:(Dream.session_field request "username")
+        ~return_url:("/c/" ^ Dream.param request "slug")
+        request
+
 (* === Public Network page: GET /c/:slug/network ===
    The community's external network — the complete connected-projects and connected-
    communities lists that used to occupy the community home's main column. The home now
@@ -820,7 +826,7 @@ let community_network_handler request =
                ~alert_type:"error" ~return_url:"/" request))
 
 (* Section feed at /c/:slug/s/:section_slug — pretty URL replaces the old ?section=id param. *)
-let community_section_handler request =
+let community_section ~page request =
   let community_slug = Dream.param request "slug" in
   let section_slug = Dream.param request "section_slug" in
   let user = Dream.session_field request "username" in
@@ -830,13 +836,8 @@ let community_section_handler request =
     | None -> 0
   in
   let sort_str_opt = Dream.query request "sort" in
-  let page =
-    match Dream.query request "page" with
-    | Some p -> ( try int_of_string p with _ -> 1)
-    | None -> 1
-  in
-  let limit = 20 in
-  let offset = (max 1 page - 1) * limit in
+  let limit = Public_pagination.page_size in
+  let offset = Public_pagination.offset page in
 
   Dream.sql request (fun db ->
       (* CURRENT durable admin authority for the private-community read gate. *)
@@ -1073,3 +1074,12 @@ let community_section_handler request =
                       Post_store.get_posts_by_section db community.id
                         section.Section_store.section_id sort_mode limit offset)
             end)
+
+let community_section_handler request =
+  match Public_pagination.parse (Dream.query request "page") with
+  | Ok page -> community_section ~page request
+  | Error `Out_of_range ->
+      Public_pagination.out_of_range
+        ?user:(Dream.session_field request "username")
+        ~return_url:("/c/" ^ Dream.param request "slug")
+        request
