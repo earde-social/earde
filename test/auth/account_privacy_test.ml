@@ -156,7 +156,8 @@ let limiter_decision_case =
             expected_hits !hits;
           Alcotest.(check string)
             (label ^ ": bucket is the operation, not the target")
-            (Earde.Rate_limit_middleware.bucket Earde.Rate_limit_middleware.Login)
+            (Earde.Rate_limit_middleware.bucket
+               Earde.Rate_limit_middleware.Login)
             !seen_endpoint;
           must_not (label ^ ": no query secret") body "b2-query-secret";
           if status = 503 then begin
@@ -515,22 +516,25 @@ let build_pipeline url =
             per operation, so this suite owns them through its own client
             address rather than through the paths. *)
          Dream.post "/b2-rl/login"
-           (as_b2_client @@ Earde.Rate_limit_middleware.middleware
-              Earde.Rate_limit_middleware.Login (fun req ->
-                incr limited_hits;
-                Earde.Auth_handlers.make_login_handler ~verify:counting_verifier
-                  req));
+           (as_b2_client
+           @@ Earde.Rate_limit_middleware.middleware
+                Earde.Rate_limit_middleware.Login (fun req ->
+                  incr limited_hits;
+                  Earde.Auth_handlers.make_login_handler
+                    ~verify:counting_verifier req));
          Dream.post "/b2-rl/forgot"
-           (as_b2_client @@ Earde.Rate_limit_middleware.middleware
-              Earde.Rate_limit_middleware.Forgot_password (fun req ->
-                incr limited_hits;
-                Earde.Auth_handlers.make_forgot_password_handler ~mail:(mail ())
-                  req));
+           (as_b2_client
+           @@ Earde.Rate_limit_middleware.middleware
+                Earde.Rate_limit_middleware.Forgot_password (fun req ->
+                  incr limited_hits;
+                  Earde.Auth_handlers.make_forgot_password_handler
+                    ~mail:(mail ()) req));
          Dream.post "/b2-rl/signup"
-           (as_b2_client @@ Earde.Rate_limit_middleware.middleware
-              Earde.Rate_limit_middleware.Signup (fun req ->
-                incr limited_hits;
-                Earde.Auth_handlers.make_signup_handler ~mail:(mail ()) req));
+           (as_b2_client
+           @@ Earde.Rate_limit_middleware.middleware
+                Earde.Rate_limit_middleware.Signup (fun req ->
+                  incr limited_hits;
+                  Earde.Auth_handlers.make_signup_handler ~mail:(mail ()) req));
        ]
 
 let pipeline url =

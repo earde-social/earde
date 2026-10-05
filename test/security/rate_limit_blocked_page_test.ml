@@ -118,8 +118,7 @@ let login_case =
    spelling that routes to /login returns to /login, and nothing a client
    puts in the path can make it protocol-relative or carry raw markup. *)
 let return_path_case =
-  Alcotest.test_case "return link is a canonical rooted path" `Quick
-    (fun () ->
+  Alcotest.test_case "return link is a canonical rooted path" `Quick (fun () ->
       List.iter
         (fun (target, expected) ->
           Alcotest.(check string)

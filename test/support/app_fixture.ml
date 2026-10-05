@@ -16,8 +16,7 @@ let app ~url ~client =
     Dream.set_client request client;
     handler request)
   @@ Earde.Request_target_redaction.redact_middleware
-  @@ Dream.sql_pool ~size:4 url
-  @@ Dream.set_secret secret @@ Dream.sql_sessions
+  @@ Dream.sql_pool ~size:4 url @@ Dream.set_secret secret @@ Dream.sql_sessions
   @@ Earde.Request_target_redaction.restore_middleware
   @@ Earde.App_routes.router
 

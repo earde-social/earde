@@ -19,6 +19,7 @@
    so the OCaml sources are scanned verbatim. *)
 
 let lc_case name f = Alcotest.test_case name `Quick f
+
 (* The route table lives in lib/app_routes.ml; bin/main.ml only mounts it. *)
 let main_ml = List.assoc "lib/app_routes.ml" Source_census.production_sources
 let count_in haystack needle = Html_assert.count_sub haystack needle
@@ -336,13 +337,11 @@ let surviving_routes_case =
           "Dream.get \"/feed\" Public_handlers.feed_handler";
           "Dream.get \"/p/:id\" Post_handlers.view_post_handler";
           "Dream.get \"/admin\" Admin_handlers.admin_dashboard_handler";
-          "Dream.post \"/admin/ban/user/:id\" \
-           Admin_handlers.ban_user_handler";
+          "Dream.post \"/admin/ban/user/:id\" Admin_handlers.ban_user_handler";
           "Dream.post \"/admin/unban/user/:id\" \
            Admin_handlers.unban_user_global_handler";
           "Dream.get \"/_debug/state\" Admin_handlers.debug_state_handler";
-          "Dream.get \"/new-community\" \
-           Community_handlers.new_community_page";
+          "Dream.get \"/new-community\" Community_handlers.new_community_page";
         ])
 
 (* --- 14. a removed route reaches the normal unknown-route response ----- *)

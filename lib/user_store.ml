@@ -10,7 +10,8 @@ let get_user_for_login_query =
   (Caqti_type.string
   ->? Caqti_type.(t2 (t4 int string string string) (t3 string bool bool)))
     "SELECT id, username, email, created_at::text, password_hash, is_admin, \
-     is_banned FROM users WHERE username = $1 OR email = $1"
+     is_banned FROM users WHERE (username = $1 OR email = $1) AND username <> \
+     '[deleted_' || id::text || ']'"
 
 let get_user_for_login (module C : Caqti_lwt.CONNECTION) identifier =
   Query_timer.with_query_timer ~name:"get_user_for_login" (fun () ->
@@ -21,7 +22,9 @@ let get_user_for_login (module C : Caqti_lwt.CONNECTION) identifier =
 (* GDPR Art. 17 (right to erasure): scrub PII from the row, preserve post/comment rows for
    thread coherence. Tombstone [deleted_N] prevents username recycling after deletion.
    bio/avatar_url are user-authored profile data and must not survive the account —
-   the settings page and /privacy both promise their removal. *)
+   the settings page and /privacy both promise their removal. The tombstone is
+   terminal: it keeps no password and no admin authority, which the
+   users_deleted_account_terminal CHECK enforces for every later write. *)
 let anonymize_user_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->. Caqti_type.unit)
@@ -30,7 +33,8 @@ let anonymize_user_query =
     \       email = 'deleted_' || id || '@earde.local',\n\
     \       password_hash = '',\n\
     \       bio = NULL,\n\
-    \       avatar_url = NULL\n\
+    \       avatar_url = NULL,\n\
+    \       is_admin = FALSE\n\
     \   WHERE id = $1"
 
 let anonymize_user (module C : Caqti_lwt.CONNECTION) user_id =

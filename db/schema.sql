@@ -1352,7 +1352,8 @@ CREATE TABLE public.users (
     bio text,
     avatar_url text,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    last_active_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    last_active_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT users_deleted_account_terminal CHECK (((username <> (('[deleted_'::text || (id)::text) || ']'::text)) OR ((password_hash = ''::text) AND (NOT is_admin))))
 );
 
 
@@ -3175,4 +3176,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260803120000'),
     ('20260929120000'),
     ('20260929130000'),
-    ('20260930120000');
+    ('20260930120000'),
+    ('20261005120000');

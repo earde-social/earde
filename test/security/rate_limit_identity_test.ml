@@ -26,8 +26,8 @@ let q_cleanup =
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
     [
       "DELETE FROM rate_limits WHERE ip_address LIKE 'rli-%'";
-      "DELETE FROM dream_session WHERE payload::jsonb ->> 'user_id' IN \
-       (SELECT id::text FROM users WHERE username LIKE 'rli\\_%')";
+      "DELETE FROM dream_session WHERE payload::jsonb ->> 'user_id' IN (SELECT \
+       id::text FROM users WHERE username LIKE 'rli\\_%')";
       "DELETE FROM users WHERE username LIKE 'rli\\_%'";
     ]
 
@@ -73,9 +73,7 @@ let invalid body = Html_assert.contains body "Invalid username or password"
 let login app browser ~target ~csrf password =
   App_fixture.post app browser target
     [
-      ("dream.csrf", csrf);
-      ("identifier", "rli_victim");
-      ("password", password);
+      ("dream.csrf", csrf); ("identifier", "rli_victim"); ("password", password);
     ]
 
 let aliases =
@@ -112,16 +110,16 @@ let login_alias_case =
             login app browser ~target:"/login" ~csrf "rli wrong guess"
           in
           Alcotest.(check int) "bad guess status" 200 status;
-          Alcotest.(check bool) "bad guess reached the handler" true
-            (invalid body);
+          Alcotest.(check bool)
+            "bad guess reached the handler" true (invalid body);
           bad (n - 1)
       in
       let* () = bad 5 in
       let* _, _, body =
         login app browser ~target:"/login" ~csrf "rli wrong guess"
       in
-      Alcotest.(check bool) "sixth attempt on /login is blocked" true
-        (blocked body);
+      Alcotest.(check bool)
+        "sixth attempt on /login is blocked" true (blocked body);
       let* () =
         Lwt_list.iter_s
           (fun target ->
@@ -182,7 +180,8 @@ let login_control_case =
       in
       Alcotest.(check int) "redirect" 303 status;
       Alcotest.(check (option string))
-        "to the feed" (Some "/") (Dream.header response "Location");
+        "to the feed" (Some "/")
+        (Dream.header response "Location");
       let* r = C.find q_sessions_for uid in
       let* sessions = or_fail "sessions" r in
       Alcotest.(check int) "one session" 1 sessions;
@@ -226,8 +225,9 @@ let parameterized_case =
         Lwt_list.iter_s
           (fun target ->
             let* _, _, body = App_fixture.post app browser target [] in
-            Alcotest.(check bool) (target ^ ": counted, not blocked") false
-              (blocked body);
+            Alcotest.(check bool)
+              (target ^ ": counted, not blocked")
+              false (blocked body);
             Lwt.return_unit)
           [
             accept "rli-a" 1;
@@ -238,11 +238,11 @@ let parameterized_case =
           ]
       in
       let* _, _, body = App_fixture.post app browser (accept "rli-z" 99) [] in
-      Alcotest.(check bool) "sixth accept, new slug and id: blocked" true
-        (blocked body);
+      Alcotest.(check bool)
+        "sixth accept, new slug and id: blocked" true (blocked body);
       let* _, _, body =
-        App_fixture.post app browser "/c/%72li-y/settings/shared-threads/7/accept"
-          []
+        App_fixture.post app browser
+          "/c/%72li-y/settings/shared-threads/7/accept" []
       in
       Alcotest.(check bool) "encoded slug: blocked" true (blocked body);
       let* _, _, body =
