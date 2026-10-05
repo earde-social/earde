@@ -4,13 +4,13 @@ module Ob = Earde.Project_onboarding
    The eight post-installation funnel events, driven through the real
    handlers and the real production stores over a real Dream pipeline
    (sql_pool + secret + memory sessions + the real router shape and route
-   patterns main.ml registers), with the fake capture sink replacing the
+   patterns lib/app_routes.ml registers), with the fake capture sink replacing the
    PostHog HTTP transport: no request can leave the process, and capture
    becomes synchronous, so "exactly one event" is an exact assertion rather
    than a race. The two GitHub-installation events are covered where their
    harnesses already live (Gh_start_handler, Gh_oauth_callback).
 
-   The authenticated-mutation rate limiter main.ml wraps these POSTs in is
+   The authenticated-mutation rate limiter lib/app_routes.ml wraps these POSTs in is
    deliberately NOT installed here: it is orthogonal to the capture
    boundary, has its own coverage, and would otherwise arbitrate the
    concurrency cases instead of the stores under test.

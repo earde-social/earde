@@ -484,19 +484,18 @@ let q_cleanup =
       "DELETE FROM users WHERE username LIKE 'ncpb_%'";
       "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
        956000001 AND 956000999";
-      "DELETE FROM rate_limits WHERE endpoint LIKE '/c/ncpb-%'";
-      "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/ncpb-%'";
+      "DELETE FROM rate_limits WHERE ip_address LIKE 'ncpb-%'";
     ]
 
-(* The shared authenticated-mutation limiter buckets by (client ip, path).
+(* The shared authenticated-mutation limiter buckets by (client ip,
+   operation); this suite's requests carry its own client address.
    Every case but the limiter's own drives more submissions against one
    path than a 60-second window allows, so the bucket is cleared between
    attempts; the limiter itself stays installed exactly as production
    wires it. *)
 let q_clear_limits =
   (Caqti_type.unit ->. Caqti_type.unit)
-    "DELETE FROM rate_limits WHERE endpoint LIKE '/c/ncpb-%' OR endpoint LIKE \
-     '/projects/ncpb-%'"
+    "DELETE FROM rate_limits WHERE ip_address LIKE 'ncpb-%'"
 
 let q_count_by_slug = Network_community_fixture.q_count_by_slug
 let q_community_state = Network_community_fixture.q_community_state
@@ -556,7 +555,7 @@ let db_case name f =
    concurrency cases run two requests genuinely at once. Everything else is
    the real production shape — secret, memory sessions, the real router
    paths bound to the real handlers, and every mutation POST wrapped in the
-   same authenticated-mutation rate limiter main.ml applies. Session
+   same authenticated-mutation rate limiter lib/app_routes.ml applies. Session
    identity is sticky: a request that already carries a session keeps its
    own user, so independent cookies stay independent under concurrency. *)
 let shared_identity : (int * bool) option ref = ref None
@@ -582,7 +581,9 @@ let identity_middleware handler request =
           in
           handler request)
 
-let limited inner = Earde.Rate_limit_middleware.middleware inner
+let limited inner =
+  Earde.Rate_limit_middleware.middleware
+    Earde.Rate_limit_middleware.Network_community_publication inner
 
 (* Stands in for the production limiter's Allowed decision, so a case can
    reach the handler over a pool the real limiter (which fails closed)
@@ -590,10 +591,14 @@ let limited inner = Earde.Rate_limit_middleware.middleware inner
 let allowing_limiter =
   Earde.Rate_limit_middleware.make_middleware
     ~check:(fun _ ~ip:_ ~endpoint:_ -> Lwt.return (Ok `Allowed))
-    ~cleanup:ignore
+    ~cleanup:ignore Earde.Rate_limit_middleware.Network_community_publication
+
+let as_suite_client handler request =
+  Dream.set_client request "ncpb-client";
+  handler request
 
 let build_pipeline_with ~limited ~url =
-  Dream.sql_pool ~size:2 url
+  as_suite_client @@ Dream.sql_pool ~size:2 url
   @@ Dream.set_secret Github_fixture.cookie_secret
   @@ Dream.memory_sessions @@ identity_middleware
   @@ Dream.router

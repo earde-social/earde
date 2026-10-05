@@ -458,7 +458,7 @@ let q_cleanup =
       "DELETE FROM users WHERE username LIKE 'phvv_%'";
       "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
        951000001 AND 951000999";
-      "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'";
+      "DELETE FROM rate_limits WHERE ip_address LIKE 'phvv-%'";
     ]
 
 let q_count_by_slug = Home_provisioning_fixture.q_count_by_slug
@@ -527,7 +527,7 @@ let db_case name f =
    concurrency cases run two requests genuinely at once. Everything else is
    the real production shape — secret, memory sessions, the real router
    paths bound to the real handlers, and the POST wrapped in the same
-   authenticated-mutation rate limiter main.ml applies. Session identity is
+   authenticated-mutation rate limiter lib/app_routes.ml applies. Session identity is
    sticky: a request that already carries a session keeps its own user, so
    independent cookies stay independent under concurrency. *)
 let shared_identity : (int * bool) option ref = ref None
@@ -555,10 +555,14 @@ let identity_middleware handler request =
 let allowing_limiter =
   Earde.Rate_limit_middleware.make_middleware
     ~check:(fun _ ~ip:_ ~endpoint:_ -> Lwt.return (Ok `Allowed))
-    ~cleanup:ignore
+    ~cleanup:ignore Earde.Rate_limit_middleware.Project_home_provisioning
+
+let as_suite_client handler request =
+  Dream.set_client request "phvv-client";
+  handler request
 
 let build_pipeline_with ~limit ~url =
-  Dream.sql_pool ~size:2 url
+  as_suite_client @@ Dream.sql_pool ~size:2 url
   @@ Dream.set_secret Github_fixture.cookie_secret
   @@ Dream.memory_sessions @@ identity_middleware
   @@ Dream.router
@@ -582,7 +586,11 @@ let build_pipeline_with ~limit ~url =
        ]
 
 let build_pipeline ~url =
-  build_pipeline_with ~limit:Earde.Rate_limit_middleware.middleware ~url
+  build_pipeline_with
+    ~limit:
+      (Earde.Rate_limit_middleware.middleware
+         Earde.Rate_limit_middleware.Project_home_provisioning)
+    ~url
 
 let pipeline_for ~url =
   match !shared_pipeline with
@@ -1764,7 +1772,7 @@ let browser_headers =
    this one resets its window between phases rather than re-proving it. *)
 let q_clear_rate_limits =
   (Caqti_type.unit ->. Caqti_type.unit)
-    "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'"
+    "DELETE FROM rate_limits WHERE ip_address LIKE 'phvv-%'"
 
 let clear_rate_limit conn =
   let (module C : Caqti_lwt.CONNECTION) = conn in

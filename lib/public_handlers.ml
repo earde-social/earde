@@ -1,7 +1,7 @@
 (* === CORE FEED ===
 
    /feed is the only global feed surface; / and /all are redirects to it (see
-   bin/main.ml). The pre-/feed home handler and its warm-chrome renderer were
+   lib/app_routes.ml). The pre-/feed home handler and its warm-chrome renderer were
    removed with the rest of the legacy chrome. *)
 
 (* /feed — the global Feed surface (shell-language, outside any one community). Reuses the same

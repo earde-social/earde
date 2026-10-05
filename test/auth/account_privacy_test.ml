@@ -106,8 +106,8 @@ let limiter_app ~check ~cleanup ~hits
         Dream.respond "b2-inner-ran") () =
   Dream.set_secret "b2-limiter-secret"
   @@ Dream.memory_sessions
-  @@ Earde.Rate_limit_middleware.make_middleware ~check ~cleanup (fun req ->
-      inner req)
+  @@ Earde.Rate_limit_middleware.make_middleware ~check ~cleanup
+       Earde.Rate_limit_middleware.Login (fun req -> inner req)
 
 let run_limited app ~target =
   let* response = app (Dream.request ~method_:`POST ~target "") in
@@ -155,8 +155,9 @@ let limiter_decision_case =
             (label ^ ": handler invocations")
             expected_hits !hits;
           Alcotest.(check string)
-            (label ^ ": bucket is the path only")
-            "/login" !seen_endpoint;
+            (label ^ ": bucket is the operation, not the target")
+            (Earde.Rate_limit_middleware.bucket Earde.Rate_limit_middleware.Login)
+            !seen_endpoint;
           must_not (label ^ ": no query secret") body "b2-query-secret";
           if status = 503 then begin
             must label body "Temporarily unavailable";
@@ -262,7 +263,7 @@ let q_cleanup =
        WHERE username LIKE 'b2x\\_%')";
       "DELETE FROM pending_signups WHERE email LIKE '%@b2.invalid' OR username \
        LIKE 'b2x\\_%'";
-      "DELETE FROM rate_limits WHERE endpoint LIKE '/b2-%'";
+      "DELETE FROM rate_limits WHERE ip_address LIKE 'b2-%'";
       "DELETE FROM users WHERE username LIKE 'b2x\\_%'";
     ]
 
@@ -477,6 +478,10 @@ let session_state request =
   in
   String.concat ";" (("id=" ^ Dream.session_id request) :: fields)
 
+let as_b2_client handler request =
+  Dream.set_client request "b2-rl-client";
+  handler request
+
 let build_pipeline url =
   Dream.sql_pool ~size:4 url
   @@ Dream.set_secret "b2-test-secret-value"
@@ -506,20 +511,24 @@ let build_pipeline url =
          Dream.post "/login-prod" Earde.Auth_handlers.login_handler;
          Dream.get "/confirm-email" Earde.Auth_handlers.confirm_email_handler;
          Dream.post "/reset-password" Earde.Auth_handlers.reset_password_handler;
-         (* The production limiter in front of real handlers, at paths whose
-            buckets this suite owns. *)
+         (* The production limiter in front of real handlers. Buckets are
+            per operation, so this suite owns them through its own client
+            address rather than through the paths. *)
          Dream.post "/b2-rl/login"
-           (Earde.Rate_limit_middleware.middleware (fun req ->
+           (as_b2_client @@ Earde.Rate_limit_middleware.middleware
+              Earde.Rate_limit_middleware.Login (fun req ->
                 incr limited_hits;
                 Earde.Auth_handlers.make_login_handler ~verify:counting_verifier
                   req));
          Dream.post "/b2-rl/forgot"
-           (Earde.Rate_limit_middleware.middleware (fun req ->
+           (as_b2_client @@ Earde.Rate_limit_middleware.middleware
+              Earde.Rate_limit_middleware.Forgot_password (fun req ->
                 incr limited_hits;
                 Earde.Auth_handlers.make_forgot_password_handler ~mail:(mail ())
                   req));
          Dream.post "/b2-rl/signup"
-           (Earde.Rate_limit_middleware.middleware (fun req ->
+           (as_b2_client @@ Earde.Rate_limit_middleware.middleware
+              Earde.Rate_limit_middleware.Signup (fun req ->
                 incr limited_hits;
                 Earde.Auth_handlers.make_signup_handler ~mail:(mail ()) req));
        ]
@@ -1865,7 +1874,7 @@ let q_arm_reset =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
     [
-      "DELETE FROM rate_limits WHERE endpoint LIKE '/b2-%'";
+      "DELETE FROM rate_limits WHERE ip_address LIKE 'b2-%'";
       "DELETE FROM password_resets WHERE user_id IN (SELECT id FROM users \
        WHERE username LIKE 'b2x\\_%')";
       "DELETE FROM pending_signups WHERE email LIKE '%@b2.invalid' OR username \

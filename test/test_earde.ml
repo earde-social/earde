@@ -58,6 +58,7 @@ let () =
            Github_user_installation_repositories_test.suites;
            Request_target_redaction_test.suites;
            Rate_limit_blocked_page_test.suites;
+           Rate_limit_identity_test.suites;
            Project_setup_repository_form_test.suites;
            Project_setup_pages_test.suites;
            Project_setup_handlers_test.suites;
