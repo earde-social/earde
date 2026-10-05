@@ -69,6 +69,8 @@ Reports that show they are more severe than described are welcome.
   `/search`, in the whole public archive). On a test community of 20,000 posts
   and 60,000 comments every permitted page took under about a second; we have
   not measured larger archives. These pages are public and not rate-limited.
+  Profile pages (`/u/:username`) list all of one author's posts and comments
+  without paging; their cost is bounded by that author's own content.
 - **Search** is substring matching over titles, post bodies and comments, with
   no full-text index; each request runs one tab's query. Deployments with large
   archives should rate-limit anonymous `GET` requests to `/search`, `/feed` and

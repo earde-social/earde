@@ -661,6 +661,93 @@ let rollback_case =
         (fun () ->
           Lwt_list.iter_s (fun q -> exec c "drop fail" q ()) q_drop_fail))
 
+(* === 7. a login whose verification overlaps a deletion, ban or password change ===
+   Argon2 runs with no lock held, between the account lookup and the session
+   write. The injected verifier performs the competing change on its own
+   connection, committed, and then verifies normally, so the change lands
+   exactly inside that window. *)
+
+let q_ban =
+  (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_banned = TRUE WHERE id = $1"
+
+let login_race_app ~url ~during =
+  Dream.sql_pool ~size:2 url
+  @@ Dream.set_secret App_fixture.secret
+  @@ Dream.sql_sessions
+  @@ Dream.router
+       [
+         Dream.get "/token" (fun req -> Dream.respond (Dream.csrf_token req));
+         Dream.post "/login"
+           (Earde.Auth_handlers.make_login_handler
+              ~verify:(fun ~password ~hash ->
+                let* () = during () in
+                Earde.Login_verification.argon2_verifier ~password ~hash));
+       ]
+
+let login_race_case label ~change ~expect_login =
+  db_case label (fun ~url c ->
+      let* id = user c "tdel_login" ~password:"tdel login pw" in
+      let* other = connect () in
+      let (module O : Caqti_lwt.CONNECTION) = other in
+      Lwt.finalize
+        (fun () ->
+          let app = login_race_app ~url ~during:(fun () -> change other id) in
+          let b = App_fixture.browser () in
+          let* _, _, csrf = App_fixture.get app b "/token" in
+          let* status, _, _ =
+            App_fixture.post app b "/login"
+              [
+                ("dream.csrf", csrf);
+                ("identifier", "tdel_login");
+                ("password", "tdel login pw");
+              ]
+          in
+          let* n = sessions c id in
+          if expect_login then begin
+            Alcotest.(check int) "logged in" 303 status;
+            Alcotest.(check int) "one session" 1 n
+          end
+          else begin
+            Alcotest.(check bool) "no login" true (status <> 303);
+            Alcotest.(check int) "no session for the account" 0 n
+          end;
+          Lwt.return_unit)
+        O.disconnect)
+
+let login_control_case =
+  login_race_case "login race control: nothing changes, the login succeeds"
+    ~change:(fun _ _ -> Lwt.return_unit)
+    ~expect_login:true
+
+let login_deletion_case =
+  login_race_case
+    "login race: an account deleted during verification gets no session"
+    ~change:(fun other id ->
+      let* r =
+        Earde.Posthog_deletion_job_store.anonymize_and_enqueue other id
+      in
+      let* _ = or_fail_s "delete" r in
+      Lwt.return_unit)
+    ~expect_login:false
+
+let login_password_change_case =
+  login_race_case
+    "login race: a password changed during verification gets no session"
+    ~change:(fun other id ->
+      let* r =
+        Earde.Credential_store.update_password_revoking_sessions other id
+          "tdel-replaced-hash"
+      in
+      or_fail_s "change" r)
+    ~expect_login:false
+
+let login_ban_case =
+  login_race_case
+    "login race: an account banned during verification gets no session"
+    ~change:(fun other id -> exec other "ban" q_ban id)
+    ~expect_login:false
+
 let suites =
   [
     ( "terminal_deletion",
@@ -673,5 +760,9 @@ let suites =
         reset_first_case;
         password_change_case;
         rollback_case;
+        login_control_case;
+        login_deletion_case;
+        login_password_change_case;
+        login_ban_case;
       ] );
   ]

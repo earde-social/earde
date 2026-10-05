@@ -54,7 +54,13 @@ let () =
     Dream.set_client request
       (Earde.Client_address.client_ip ~trusted_proxies
          ~peer:(Dream.client request)
-         ~forwarded_for:(Dream.header request "X-Forwarded-For"));
+         ~forwarded_for:
+           (* The last header line, as Client_address expects: a proxy that
+              adds its own line instead of appending to the client's leaves
+              the client's line first. *)
+           (match List.rev (Dream.headers request "X-Forwarded-For") with
+           | last :: _ -> Some last
+           | [] -> None));
     handler request
   in
   Dream.run ~interface ~port:8080

@@ -86,6 +86,10 @@ let post_json ?(timeout = publish_timeout_seconds) ~gateway_url ~internal_secret
   | Some "http", Some host -> (
       let port = Option.value (Uri.port uri) ~default:80 in
       let host_header =
+        (* An IPv6 literal needs its brackets back in a Host header. *)
+        let host =
+          if String.contains host ':' then "[" ^ host ^ "]" else host
+        in
         match Uri.port uri with
         | Some p -> Printf.sprintf "%s:%d" host p
         | None -> host

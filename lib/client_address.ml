@@ -47,8 +47,9 @@ let last_forwarded value =
   | [] -> None
   | last :: _ -> normalize_ip last
 
-(* Only the LAST X-Forwarded-For header is considered when a request carries
-   several: that is the one our own proxy appended to. *)
+(* Only the LAST X-Forwarded-For header line is considered when a request
+   carries several (bin/main.ml passes it): that is the one our own proxy
+   wrote or appended to. *)
 let client_ip ~trusted_proxies ~peer ~forwarded_for =
   match peer_ip peer with
   | None -> fallback_key

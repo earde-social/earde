@@ -45,13 +45,15 @@ password-reset links.
 The per-client rate limits on login, signup, password-reset requests and the
 other sensitive forms count attempts per client address. When the request comes
 from a proxy in `EARDE_TRUSTED_PROXIES`, Earde takes that address from the
-right-most `X-Forwarded-For` entry; otherwise it uses the TCP peer.
+right-most entry of the last `X-Forwarded-For` header line; otherwise it uses
+the TCP peer.
 
-So the proxy that connects to Earde must **replace** any `X-Forwarded-For` the
-client sent with the client address it determined itself. Appending to the
-client's header, or passing it through, is not enough: then the client chooses
-the value Earde reads, and with it the bucket its attempts are counted in. With
-nginx as the only proxy:
+So the proxy that connects to Earde must make sure that value is the client
+address it determined itself. If it passes the client's header through, the
+client chooses the value Earde reads, and with it the bucket its attempts are
+counted in. Appending works only while exactly one proxy appends to exactly one
+header line; replacing the header holds in every topology, so use it. With nginx
+as the only proxy:
 
 ```nginx
 proxy_set_header X-Forwarded-For $remote_addr;
@@ -89,8 +91,11 @@ upgrade never lets old code serve against a migrated database. The order:
 1. **Build and verify the target revision.** Check out the exact commit and
    confirm it with `git rev-parse HEAD`. Build it (`dune build`, and
    `gleam build` in `services/realtime_gateway`) and make sure its CI run passed.
-   List what it will apply with `dbmate status`, run against the production
-   database: these are the pending migrations.
+   Do this in a separate checkout or build directory: if the running service
+   starts from the same tree it builds in, a restart before step 4 would run the
+   new code against the old schema. List what it will apply with
+   `dbmate status`, run against the production database: these are the pending
+   migrations.
 2. **Stop every writer of the old version.** Stop all application processes,
    the gateway, and any job that writes to the database (for example
    `retry_posthog_deletions`). Then confirm nothing old is still connected:
@@ -104,8 +109,9 @@ upgrade never lets old code serve against a migrated database. The order:
    committed write. Verify it before going on: restore the dump into a scratch
    database and compare `SELECT version FROM schema_migrations` and a few row
    counts with production.
-4. **Apply the migrations:** `dbmate up`. Then `dbmate status` must show none
-   pending.
+4. **Apply the migrations:** `dbmate --no-dump-schema up` (without the flag,
+   dbmate rewrites the checked-in `db/schema.sql`). Then `dbmate status` must
+   show none pending.
 5. **Start the new version:** the gateway, then the application, both built
    from the revision in step 1.
 6. **Smoke-test and record.** Load `/feed`, log in, post a thread and a chat

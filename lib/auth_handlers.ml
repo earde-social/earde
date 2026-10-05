@@ -416,22 +416,42 @@ let make_login_handler ~verify request =
                   Dream.set_session_field request "is_admin"
                     (if is_admin then "true" else "false")
                 in
-                (* Exactly once per fully successful login (credentials
+                let hash =
+                  match row with Some (_, (hash, _, _)) -> hash | None -> ""
+                in
+                (* The session is committed now. Re-check the account under a
+                   row lock before treating the login as done: a deletion,
+                   ban or password change that landed during verification
+                   must not leave a session behind (User_store.mli). *)
+                let%lwt current =
+                  Dream.sql request (fun db ->
+                      User_store.login_still_current db ~id ~hash)
+                in
+                begin match current with
+                | Ok false | Error _ ->
+                    let%lwt () = Dream.invalidate_session request in
+                    Dream.html
+                      (Site_pages.msg_page ~auth:true ~title:"Login Failed"
+                         ~message:"Invalid username or password."
+                         ~alert_type:"error" ~return_url:"/login" request)
+                | Ok true ->
+                    (* Exactly once per fully successful login (credentials
                      verified, not banned); the incoming request still carries
                      the consent cookie the gate reads. *)
-                Analytics.capture_if_consented request
-                  ~distinct_id:(Analytics.distinct_id_of_user_id id)
-                  (Analytics.Account_logged_in
-                     {
-                       user_id = id;
-                       person =
+                    Analytics.capture_if_consented request
+                      ~distinct_id:(Analytics.distinct_id_of_user_id id)
+                      (Analytics.Account_logged_in
                          {
-                           Analytics.username = user;
-                           signup_date = created_at;
-                           is_admin;
-                         };
-                     });
-                Dream.redirect request "/"
+                           user_id = id;
+                           person =
+                             {
+                               Analytics.username = user;
+                               signup_date = created_at;
+                               is_admin;
+                             };
+                         });
+                    Dream.redirect request "/"
+                end
           | None ->
               Dream.html
                 (Site_pages.msg_page ~auth:true ~title:"Login Failed"
